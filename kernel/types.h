@@ -1,10 +1,16 @@
-typedef unsigned int   uint;
+#pragma once
+
+typedef unsigned int uint;
 typedef unsigned short ushort;
-typedef unsigned char  uchar;
+typedef unsigned char uchar;
 
 typedef unsigned char uint8;
 typedef unsigned short uint16;
-typedef unsigned int  uint32;
+typedef unsigned int uint32;
 typedef unsigned long uint64;
 
 typedef uint64 pde_t;
+
+#ifndef NELEM
+#define NELEM(x) (sizeof(x) / sizeof((x)[0]))
+#endif
