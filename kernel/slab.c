@@ -1,0 +1,287 @@
+#include "slab.h"
+
+#include "kalloc.h"
+#include "printf.h"
+#include "riscv.h"
+#include "string.h"
+
+// Default alignment to cache line size (64 bytes)
+#define DEFAULT_ALIGN 64
+
+// Minimum object size to avoid fragmentation
+#define MIN_OBJ_SIZE 8
+
+// Helper function to align size
+static uint align_size(uint size, uint align) {
+  if (align == 0) align = DEFAULT_ALIGN;
+  return (size + align - 1) & ~(align - 1);
+}
+
+// Helper function to remove slab from list
+static void slab_remove(struct slab **list, struct slab *slab) {
+  if (*list == slab) {
+    *list = slab->next;
+    return;
+  }
+
+  struct slab *prev = *list;
+  while (prev && prev->next != slab) {
+    prev = prev->next;
+  }
+  if (prev) {
+    prev->next = slab->next;
+  }
+}
+
+// Helper function to add slab to list head
+static void slab_add_head(struct slab **list, struct slab *slab) {
+  slab->next = *list;
+  *list = slab;
+}
+
+// Create a new slab for the given cache
+static struct slab *slab_create(struct kmem_cache *cache) {
+  // Allocate a page from kalloc
+  char *page = (char *)kalloc();
+  if (!page) {
+    return 0;
+  }
+
+  // Allocate slab structure
+  struct slab *slab = (struct slab *)kalloc();
+  if (!slab) {
+    kfree(page);
+    return 0;
+  }
+
+  // Initialize slab
+  slab->cache = cache;
+  slab->mem = page;
+  slab->nr_objs = PGSIZE / cache->objsize;
+  slab->nr_free = slab->nr_objs;
+  slab->next = 0;
+
+  // Build freelist - each object points to the next free object
+  for (uint i = 0; i < slab->nr_objs; i++) {
+    char *obj = page + i * cache->objsize;
+    if (i == slab->nr_objs - 1) {
+      // Last object points to null
+      *(void **)obj = 0;
+    } else {
+      // Point to next object
+      *(void **)obj = (void *)(page + (i + 1) * cache->objsize);
+    }
+  }
+
+  // Initialize freelist - point to the first object
+  slab->freelist = (void **)page;
+
+  return slab;
+}
+
+// Destroy a slab and return its pages to kalloc
+static void slab_destroy(struct slab *slab) {
+  if (!slab) return;
+
+  // Free the object area page (freelist is part of this page)
+  kfree(slab->mem);
+
+  // Free the slab structure
+  kfree(slab);
+}
+
+// Create a cache for objects of given size
+struct kmem_cache *kmem_cache_create(const char *name, uint objsize,
+                                     void (*ctor)(void *), void (*dtor)(void *),
+                                     uint align) {
+  if (!name || objsize < MIN_OBJ_SIZE) {
+    return 0;
+  }
+
+  // Allocate cache structure
+  struct kmem_cache *cache = (struct kmem_cache *)kalloc();
+  if (!cache) {
+    return 0;
+  }
+
+  // Initialize cache
+  strncpy(cache->name, name, sizeof(cache->name) - 1);
+  cache->name[sizeof(cache->name) - 1] = '\0';
+  cache->objsize = align_size(objsize, align);
+  cache->align = align;
+  cache->ctor = ctor;
+  cache->dtor = dtor;
+  cache->partial = 0;
+  cache->full = 0;
+  cache->empty = 0;
+  initlock(&cache->lock, cache->name);
+
+  return cache;
+}
+
+// Destroy a cache and all its slabs
+void kmem_cache_destroy(struct kmem_cache *cache) {
+  if (!cache) return;
+
+  acquire(&cache->lock);
+
+  // Destroy all slabs in all lists
+  struct slab *slab;
+
+  // Destroy partial slabs
+  while ((slab = cache->partial)) {
+    cache->partial = slab->next;
+    slab_destroy(slab);
+  }
+
+  // Destroy full slabs
+  while ((slab = cache->full)) {
+    cache->full = slab->next;
+    slab_destroy(slab);
+  }
+
+  // Destroy empty slabs
+  while ((slab = cache->empty)) {
+    cache->empty = slab->next;
+    slab_destroy(slab);
+  }
+
+  release(&cache->lock);
+
+  // Free the cache structure itself
+  kfree(cache);
+}
+
+// Allocate an object from the cache
+void *kmem_cache_alloc(struct kmem_cache *cache) {
+  if (!cache) return 0;
+
+  acquire(&cache->lock);
+
+  struct slab *slab = 0;
+  void *obj = 0;
+
+  // Fast path: try partial slabs first
+  if (cache->partial) {
+    slab = cache->partial;
+    obj = *(void **)slab->freelist;
+    *(void **)slab->freelist = *(void **)obj;
+    slab->nr_free--;
+
+    // If slab is now full, move to full list
+    if (slab->nr_free == 0) {
+      slab_remove(&cache->partial, slab);
+      slab_add_head(&cache->full, slab);
+    }
+  }
+  // Try empty slabs
+  else if (cache->empty) {
+    slab = cache->empty;
+    obj = *(void **)slab->freelist;
+    *(void **)slab->freelist = *(void **)obj;
+    slab->nr_free--;
+
+    // Move to partial list
+    slab_remove(&cache->empty, slab);
+    slab_add_head(&cache->partial, slab);
+  }
+  // Create new slab
+  else {
+    slab = slab_create(cache);
+    if (!slab) {
+      release(&cache->lock);
+      return 0;
+    }
+
+    obj = *(void **)slab->freelist;
+    *(void **)slab->freelist = *(void **)obj;
+    slab->nr_free--;
+
+    // Add to partial list
+    slab_add_head(&cache->partial, slab);
+  }
+
+  release(&cache->lock);
+
+  // Call constructor if provided
+  if (cache->ctor) {
+    cache->ctor(obj);
+  }
+
+  return obj;
+}
+
+// Free an object back to the cache
+void kmem_cache_free(struct kmem_cache *cache, void *obj) {
+  if (!cache || !obj) return;
+
+  // Call destructor if provided
+  if (cache->dtor) {
+    cache->dtor(obj);
+  }
+
+  acquire(&cache->lock);
+
+  // Find which slab this object belongs to
+  // We'll use a simple approach: check all slabs
+  struct slab *slab = 0;
+
+  // Check partial slabs
+  for (struct slab *s = cache->partial; s; s = s->next) {
+    if ((char *)obj >= s->mem && (char *)obj < s->mem + PGSIZE) {
+      slab = s;
+      break;
+    }
+  }
+
+  // Check full slabs
+  if (!slab) {
+    for (struct slab *s = cache->full; s; s = s->next) {
+      if ((char *)obj >= s->mem && (char *)obj < s->mem + PGSIZE) {
+        slab = s;
+        break;
+      }
+    }
+  }
+
+  // Check empty slabs
+  if (!slab) {
+    for (struct slab *s = cache->empty; s; s = s->next) {
+      if ((char *)obj >= s->mem && (char *)obj < s->mem + PGSIZE) {
+        slab = s;
+        break;
+      }
+    }
+  }
+
+  if (!slab) {
+    // Object doesn't belong to any slab - this is an error
+    release(&cache->lock);
+    panic("kmem_cache_free: object not found in any slab");
+    return;
+  }
+
+  // Add object back to freelist
+  *(void **)obj = *(void **)slab->freelist;
+  *(void **)slab->freelist = obj;
+  slab->nr_free++;
+
+  // Move slab between lists based on its state
+  if (slab->nr_free == 1) {
+    // Was full, now partial
+    slab_remove(&cache->full, slab);
+    slab_add_head(&cache->partial, slab);
+  } else if (slab->nr_free == slab->nr_objs) {
+    // Now empty
+    slab_remove(&cache->partial, slab);
+    slab_add_head(&cache->empty, slab);
+  }
+
+  release(&cache->lock);
+}
+
+// Initialize slab allocator (called from main)
+void slab_init(void) {
+  // Nothing to initialize for now
+  // This function is here for future use
+}
