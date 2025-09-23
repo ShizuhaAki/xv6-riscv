@@ -1,5 +1,7 @@
 #define SBRK_ERROR ((char*)-1)
 
+#include "kernel/types.h"
+
 struct stat;
 
 // system calls
@@ -25,12 +27,6 @@ char* sys_sbrk(int, int);
 int pause(int);
 int uptime(void);
 
-// slab allocator syscalls
-int kmem_cache_create(const char* name, uint objsize, void (*ctor)(void*),
-                      void (*dtor)(void*), uint align);
-void* kmem_cache_alloc(int cache_id);
-int kmem_cache_free(int cache_id, void* obj);
-int kmem_cache_destroy(int cache_id);
 
 // ulib.c
 int stat(const char*, struct stat*);

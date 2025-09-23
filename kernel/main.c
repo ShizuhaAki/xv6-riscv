@@ -28,7 +28,6 @@ void main() {
     printf("\n");
     kinit();              // physical page allocator
     slab_init();          // slab allocator
-    slab_syscall_init();  // slab syscall system
     kvminit();            // create kernel page table
     kvminithart();        // turn on paging
     procinit();           // process table

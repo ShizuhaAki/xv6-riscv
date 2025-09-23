@@ -22,10 +22,6 @@
 #define SYS_link 19
 #define SYS_mkdir 20
 #define SYS_close 21
-#define SYS_kmem_cache_create 100
-#define SYS_kmem_cache_alloc 101
-#define SYS_kmem_cache_free 102
-#define SYS_kmem_cache_destroy 103
 
 // Declarations for syscall argument helpers and dispatcher
 #ifndef __ASSEMBLER__

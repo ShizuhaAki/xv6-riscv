@@ -19,7 +19,6 @@ OBJS = \
   $K/syscall.o \
   $K/sysproc.o \
   $K/slab.o \
-  $K/sysslab.o \
   $K/bio.o \
   $K/fs.o \
   $K/log.o \
@@ -144,7 +143,6 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
-	$U/_slabtest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

@@ -42,7 +42,3 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
-entry("kmem_cache_create");
-entry("kmem_cache_alloc");
-entry("kmem_cache_free");
-entry("kmem_cache_destroy");

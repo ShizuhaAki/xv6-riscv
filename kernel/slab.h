@@ -41,4 +41,3 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj);
 
 // Helper functions
 void slab_init(void);
-void slab_syscall_init(void);
