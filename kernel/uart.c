@@ -6,12 +6,8 @@
 
 #include "console.h"
 #include "memlayout.h"
-#include "param.h"
-#include "printf.h"
 #include "proc.h"
-#include "riscv.h"
 #include "spinlock.h"
-#include "types.h"
 
 // the UART control registers are memory-mapped
 // at address UART0. this macro returns the

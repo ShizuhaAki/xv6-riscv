@@ -5,7 +5,6 @@
 #include "kalloc.h"
 
 #include "memlayout.h"
-#include "param.h"
 #include "printf.h"
 #include "riscv.h"
 #include "spinlock.h"

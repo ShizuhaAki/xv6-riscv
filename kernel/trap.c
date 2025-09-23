@@ -1,7 +1,6 @@
 #include "trap.h"
 
 #include "memlayout.h"
-#include "param.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"

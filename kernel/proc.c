@@ -1,6 +1,5 @@
 #include "proc.h"
 
-#include "console.h"
 #include "exec.h"
 #include "file.h"
 #include "fs.h"

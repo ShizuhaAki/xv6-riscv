@@ -1,14 +1,10 @@
 #include "vm.h"
 
-#include "elf.h"
-#include "fs.h"
 #include "kalloc.h"
 #include "memlayout.h"
-#include "param.h"
 #include "printf.h"
 #include "proc.h"
 #include "riscv.h"
-#include "spinlock.h"
 #include "string.h"
 #include "types.h"
 

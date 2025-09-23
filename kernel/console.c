@@ -14,13 +14,7 @@
 #include <stdarg.h>
 
 #include "file.h"
-#include "fs.h"
-#include "memlayout.h"
-#include "param.h"
-#include "printf.h"
 #include "proc.h"
-#include "riscv.h"
-#include "sleeplock.h"
 #include "spinlock.h"
 #include "types.h"
 #include "uart.h"

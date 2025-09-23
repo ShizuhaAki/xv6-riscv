@@ -3,16 +3,11 @@
 #include "file.h"
 #include "fs.h"
 #include "kalloc.h"
-#include "memlayout.h"
-#include "param.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
-#include "riscv.h"
 #include "slab.h"
 #include "trap.h"
-#include "types.h"
-#include "uart.h"
 #include "virtio_disk.h"
 #include "vm.h"
 
@@ -26,20 +21,20 @@ void main() {
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
-    kinit();              // physical page allocator
-    slab_init();          // slab allocator
-    kvminit();            // create kernel page table
-    kvminithart();        // turn on paging
-    procinit();           // process table
-    trapinit();           // trap vectors
-    trapinithart();       // install kernel trap vector
-    plicinit();           // set up interrupt controller
-    plicinithart();       // ask PLIC for device interrupts
-    binit();              // buffer cache
-    iinit();              // inode table
-    fileinit();           // file table
-    virtio_disk_init();   // emulated hard disk
-    userinit();           // first user process
+    kinit();             // physical page allocator
+    slab_init();         // slab allocator
+    kvminit();           // create kernel page table
+    kvminithart();       // turn on paging
+    procinit();          // process table
+    trapinit();          // trap vectors
+    trapinithart();      // install kernel trap vector
+    plicinit();          // set up interrupt controller
+    plicinithart();      // ask PLIC for device interrupts
+    binit();             // buffer cache
+    iinit();             // inode table
+    fileinit();          // file table
+    virtio_disk_init();  // emulated hard disk
+    userinit();          // first user process
     __sync_synchronize();
     started = 1;
   } else {

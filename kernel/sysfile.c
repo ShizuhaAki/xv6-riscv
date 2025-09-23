@@ -18,8 +18,6 @@ struct inode *ialloc(uint, short);
 #include "printf.h"
 #include "proc.h"
 #include "riscv.h"
-#include "sleeplock.h"
-#include "spinlock.h"
 #include "stat.h"
 #include "string.h"
 #include "syscall.h"

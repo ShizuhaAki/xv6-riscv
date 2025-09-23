@@ -6,11 +6,8 @@
 #include "param.h"
 #include "printf.h"
 #include "proc.h"
-#include "riscv.h"
-#include "sleeplock.h"
 #include "spinlock.h"
 #include "string.h"
-#include "types.h"
 
 // Simple logging that allows concurrent FS system calls.
 //

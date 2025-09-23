@@ -1,8 +1,4 @@
-#include "memlayout.h"
-#include "param.h"
-#include "printf.h"
 #include "proc.h"
-#include "riscv.h"
 #include "spinlock.h"
 #include "syscall.h"
 #include "trap.h"

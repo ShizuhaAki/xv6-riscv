@@ -1,7 +1,5 @@
-#include "memlayout.h"
 #include "param.h"
 #include "riscv.h"
-#include "trap.h"
 #include "types.h"
 
 void main();

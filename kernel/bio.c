@@ -16,10 +16,8 @@
 #include "bio.h"
 
 #include "buf.h"
-#include "fs.h"
 #include "param.h"
 #include "printf.h"
-#include "riscv.h"
 #include "sleeplock.h"
 #include "spinlock.h"
 #include "types.h"
