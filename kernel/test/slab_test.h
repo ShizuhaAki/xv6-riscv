@@ -2,3 +2,24 @@
 
 void slab_test_single(void);
 void slab_test_multi(void);
+
+// Individual test functions
+int slab_test_basic_alloc(void);
+int slab_test_batch_alloc(void);
+int slab_test_unaligned_batch(void);
+int slab_test_large_batch(void);
+int slab_test_huge_batch(void);
+int slab_test_single_random_free(void);
+int slab_test_single_ctor_dtor(void);
+int slab_test_single_memory_integrity(void);
+int slab_test_single_edge_cases(void);
+int slab_test_single_reuse_cycles(void);
+int slab_test_single_alignment(void);
+int slab_test_single_stress(void);
+int slab_test_single_cache_destroy(void);
+int slab_test_single_error_handling(void);
+int slab_test_single_multi_cache(void);
+int slab_test_single_extreme_alloc(void);
+int slab_test_single_corruption_detection(void);
+int slab_test_single_fragmentation(void);
+int slab_test_single_boundary_conditions(void);
