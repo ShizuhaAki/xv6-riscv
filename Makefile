@@ -19,7 +19,8 @@ OBJS = \
   $K/syscall.o \
   $K/sysproc.o \
   $K/slab.o \
-  $K/test/slab_test.o \
+  $K/test/slab_test_single.o \
+  $K/test/slab_test_multi.o \
   $K/bio.o \
   $K/fs.o \
   $K/log.o \

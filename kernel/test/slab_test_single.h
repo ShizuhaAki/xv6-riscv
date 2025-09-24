@@ -1,9 +1,9 @@
 #pragma once
 
+// Single-threaded slab test entry function
 void slab_test_single(void);
-void slab_test_multi(void);
 
-// Individual test functions
+// Individual single-threaded test functions
 int slab_test_single_basic_alloc(void);
 int slab_test_single_batch_alloc(void);
 int slab_test_single_unaligned_batch(void);

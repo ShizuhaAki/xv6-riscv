@@ -1,4 +1,4 @@
-#include "slab_test.h"
+#include "slab_test_single.h"
 
 #include "../kalloc.h"
 #include "../printf.h"
@@ -782,7 +782,10 @@ int slab_test_single_extreme_alloc(void) {
     return 0;
   }
 
-  const int MAX_ALLOCS = PGSIZE / sizeof(void *);  // Bounded by one kalloc() page for pointer array capacity
+  const int MAX_ALLOCS =
+      PGSIZE /
+      sizeof(
+          void *);  // Bounded by one kalloc() page for pointer array capacity
   void **objs = (void **)kalloc();
   if (!objs) {
     printf("Failed to allocate temp array for extreme test\n");
@@ -1083,6 +1086,3 @@ void slab_test_single(void) {
   }
   printf("Slab single-core tests: %d passed, %d failed\n", passed, failed);
 }
-
-// Multi thread slab test
-void slab_test_multi(void) {}
