@@ -41,6 +41,11 @@ static void slab_add_head(struct slab **list, struct slab *slab) {
 
 // Create a new slab for the given cache
 static struct slab *slab_create(struct kmem_cache *cache) {
+  // If object is larger than page size, we can't create a slab
+  if (cache->objsize > PGSIZE) {
+    return 0;
+  }
+
   // Allocate a page from kalloc
   char *page = (char *)kalloc();
   if (!page) {
@@ -61,7 +66,8 @@ static struct slab *slab_create(struct kmem_cache *cache) {
   slab->nr_free = slab->nr_objs;
   slab->next = 0;
 
-  // Build freelist - each object points to the next free object
+  // Build freelist - store pointers in the first 8 bytes of each object
+  // This is safe because we're using the object space for freelist management
   for (uint i = 0; i < slab->nr_objs; i++) {
     char *obj = page + i * cache->objsize;
     if (i == slab->nr_objs - 1) {
@@ -74,7 +80,7 @@ static struct slab *slab_create(struct kmem_cache *cache) {
   }
 
   // Initialize freelist - point to the first object
-  slab->freelist = (void **)page;
+  slab->freelist = (void *)page;
 
   return slab;
 }
@@ -164,8 +170,8 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
   // Fast path: try partial slabs first
   if (cache->partial) {
     slab = cache->partial;
-    obj = *(void **)slab->freelist;
-    *(void **)slab->freelist = *(void **)obj;
+    obj = slab->freelist;
+    slab->freelist = *(void **)slab->freelist;
     slab->nr_free--;
 
     // If slab is now full, move to full list
@@ -177,8 +183,8 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
   // Try empty slabs
   else if (cache->empty) {
     slab = cache->empty;
-    obj = *(void **)slab->freelist;
-    *(void **)slab->freelist = *(void **)obj;
+    obj = slab->freelist;
+    slab->freelist = *(void **)slab->freelist;
     slab->nr_free--;
 
     // Move to partial list
@@ -193,8 +199,8 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
       return 0;
     }
 
-    obj = *(void **)slab->freelist;
-    *(void **)slab->freelist = *(void **)obj;
+    obj = slab->freelist;
+    slab->freelist = *(void **)slab->freelist;
     slab->nr_free--;
 
     // Add to partial list
@@ -262,8 +268,8 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj) {
   }
 
   // Add object back to freelist
-  *(void **)obj = *(void **)slab->freelist;
-  *(void **)slab->freelist = obj;
+  *(void **)obj = slab->freelist;
+  slab->freelist = obj;
   slab->nr_free++;
 
   // Move slab between lists based on its state
@@ -280,8 +286,150 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj) {
   release(&cache->lock);
 }
 
-// Initialize slab allocator (called from main)
-void slab_init(void) {
-  // Nothing to initialize for now
-  // This function is here for future use
+void slab_test_single_simple_alloc_and_free(void) {
+  struct kmem_cache *cache = kmem_cache_create("test", 1024, 0, 0, 0);
+  if (!cache) {
+    printf("Failed to create cache\n");
+    return;
+  }
+  const int OBJ_NUM = 1024;
+
+  int iter;
+  for (iter = 0; iter < OBJ_NUM; iter++) {
+    if (iter % 100 == 0) {
+    }
+    void *obj = kmem_cache_alloc(cache);
+    if (!obj) {
+      printf("Failed to allocate object %d\n", iter);
+      return;
+    }
+    kmem_cache_free(cache, obj);
+  }
 }
+
+void slab_test_single_batched_alloc_and_free(void) {
+  struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
+  if (!cache) {
+    printf("Failed to create cache\n");
+    return;
+  }
+
+  const int BATCH_SIZE = 16;
+  const int OBJ_NUM = 1024 / BATCH_SIZE;
+
+  int iter;
+  for (iter = 0; iter < OBJ_NUM; iter++) {
+    void *obj[BATCH_SIZE];
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      obj[i] = kmem_cache_alloc(cache);
+      if (!obj[i]) {
+        printf("Failed to allocate object %d in iter %d\n", i, iter);
+        return;
+      }
+    }
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      kmem_cache_free(cache, obj[i]);
+    }
+  }
+}
+
+void slab_test_single_undividible_batched_alloc_and_free(void) {
+  struct kmem_cache *cache = kmem_cache_create("test", 80, 0, 0, 0);
+  if (!cache) {
+    printf("Failed to create cache\n");
+    return;
+  }
+
+  const int BATCH_SIZE = 16;
+  const int OBJ_NUM = 1024 / BATCH_SIZE;
+
+  int iter;
+  for (iter = 0; iter < OBJ_NUM; iter++) {
+    void *obj[BATCH_SIZE];
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      obj[i] = kmem_cache_alloc(cache);
+      if (!obj[i]) {
+        printf("Failed to allocate object %d in iter %d\n", i, iter);
+        return;
+      }
+    }
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      kmem_cache_free(cache, obj[i]);
+    }
+  }
+}
+
+void slab_test_single_big_batch_alloc_and_free(void) {
+  struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
+  if (!cache) {
+    printf("Failed to create cache\n");
+    return;
+  }
+
+  const int BATCH_SIZE = 128;
+  const int OBJ_NUM = 1024 / BATCH_SIZE;
+
+  int iter;
+  for (iter = 0; iter < OBJ_NUM; iter++) {
+    void *obj[BATCH_SIZE];
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      obj[i] = kmem_cache_alloc(cache);
+      if (!obj[i]) {
+        printf("Failed to allocate object %d in iter %d\n", i, iter);
+        return;
+      }
+    }
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      kmem_cache_free(cache, obj[i]);
+    }
+  }
+}
+
+void slab_test_single_huge_batch_alloc_and_free(void) {
+  struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
+  if (!cache) {
+    printf("Failed to create cache\n");
+    return;
+  }
+
+  const int BATCH_SIZE = 1024;
+  const int OBJ_NUM = 1024 / BATCH_SIZE;
+
+  int iter;
+  for (iter = 0; iter < OBJ_NUM; iter++) {
+    void *obj[BATCH_SIZE];
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      obj[i] = kmem_cache_alloc(cache);
+      if (!obj[i]) {
+        printf("Failed to allocate object\n");
+        return;
+      }
+    }
+    for (int i = 0; i < BATCH_SIZE; i++) {
+      kmem_cache_free(cache, obj[i]);
+    }
+  }
+}
+
+void (*slab_single_core_test[])(void) = {
+    slab_test_single_simple_alloc_and_free,
+    slab_test_single_batched_alloc_and_free,
+    slab_test_single_undividible_batched_alloc_and_free,
+    slab_test_single_big_batch_alloc_and_free,
+    // slab_test_single_huge_batch_alloc_and_free,
+};
+
+const int slab_single_core_test_num =
+    sizeof(slab_single_core_test) / sizeof(slab_single_core_test[0]);
+
+// Single thread slab test
+void slab_test_single(void) {
+  printf("Starting slab single-core tests...\n");
+  for (int i = 0; i < slab_single_core_test_num; i++) {
+    slab_single_core_test[i]();
+  }
+  printf("Slab single-core tests passed\n");
+}
+
+// Multi thread slab test
+void slab_test_multi(void) {}

@@ -11,10 +11,10 @@ struct slab;
 struct slab {
   struct slab *next;
   struct kmem_cache *cache;
-  char *mem;        // slab object area start address
-  uint nr_objs;     // total number of objects
-  uint nr_free;     // number of free objects
-  void **freelist;  // free object list (stack)
+  char *mem;       // slab object area start address
+  uint nr_objs;    // total number of objects
+  uint nr_free;    // number of free objects
+  void *freelist;  // free object list (stack)
 };
 
 // Cache structure for each object type
@@ -39,5 +39,5 @@ void kmem_cache_destroy(struct kmem_cache *cache);
 void *kmem_cache_alloc(struct kmem_cache *cache);
 void kmem_cache_free(struct kmem_cache *cache, void *obj);
 
-// Helper functions
-void slab_init(void);
+void slab_test_single(void);
+void slab_test_multi(void);

@@ -22,7 +22,6 @@ void main() {
     printf("xv6 kernel is booting\n");
     printf("\n");
     kinit();             // physical page allocator
-    slab_init();         // slab allocator
     kvminit();           // create kernel page table
     kvminithart();       // turn on paging
     procinit();          // process table
@@ -35,6 +34,8 @@ void main() {
     fileinit();          // file table
     virtio_disk_init();  // emulated hard disk
     userinit();          // first user process
+
+    slab_test_single();
     __sync_synchronize();
     started = 1;
   } else {
@@ -46,5 +47,6 @@ void main() {
     plicinithart();  // ask PLIC for device interrupts
   }
 
+  slab_test_multi();
   scheduler();
 }
