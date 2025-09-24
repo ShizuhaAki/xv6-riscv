@@ -5,7 +5,7 @@
 #include "../riscv.h"
 #include "../slab.h"
 
-int slab_test_basic_alloc(void) {
+int slab_test_single_basic_alloc(void) {
   struct kmem_cache *cache = kmem_cache_create("test", 1024, 0, 0, 0);
   if (!cache) {
     printf("Failed to create cache\n");
@@ -28,7 +28,7 @@ int slab_test_basic_alloc(void) {
   return 1;
 }
 
-int slab_test_batch_alloc(void) {
+int slab_test_single_batch_alloc(void) {
   struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
   if (!cache) {
     printf("Failed to create cache\n");
@@ -62,7 +62,7 @@ int slab_test_batch_alloc(void) {
   return 1;
 }
 
-int slab_test_unaligned_batch(void) {
+int slab_test_single_unaligned_batch(void) {
   struct kmem_cache *cache = kmem_cache_create("test", 80, 0, 0, 0);
   if (!cache) {
     printf("Failed to create cache\n");
@@ -96,7 +96,7 @@ int slab_test_unaligned_batch(void) {
   return 1;
 }
 
-int slab_test_large_batch(void) {
+int slab_test_single_large_batch(void) {
   struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
   if (!cache) {
     printf("Failed to create cache\n");
@@ -130,7 +130,7 @@ int slab_test_large_batch(void) {
   return 1;
 }
 
-int slab_test_huge_batch(void) {
+int slab_test_single_huge_batch(void) {
   struct kmem_cache *cache = kmem_cache_create("test", 64, 0, 0, 0);
   if (!cache) {
     printf("Failed to create cache\n");
@@ -1047,11 +1047,11 @@ int slab_test_single_boundary_conditions(void) {
 }
 
 int (*slab_single_core_test[])(void) = {
-    slab_test_basic_alloc,
-    slab_test_batch_alloc,
-    slab_test_unaligned_batch,
-    slab_test_large_batch,
-    slab_test_huge_batch,
+    slab_test_single_basic_alloc,
+    slab_test_single_batch_alloc,
+    slab_test_single_unaligned_batch,
+    slab_test_single_large_batch,
+    slab_test_single_huge_batch,
     slab_test_single_random_free,
     slab_test_single_ctor_dtor,
     slab_test_single_memory_integrity,
