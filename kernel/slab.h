@@ -38,6 +38,3 @@ void kmem_cache_destroy(struct kmem_cache *cache);
 
 void *kmem_cache_alloc(struct kmem_cache *cache);
 void kmem_cache_free(struct kmem_cache *cache, void *obj);
-
-void slab_test_single(void);
-void slab_test_multi(void);

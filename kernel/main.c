@@ -7,6 +7,7 @@
 #include "printf.h"
 #include "proc.h"
 #include "slab.h"
+#include "test/slab_test.h"
 #include "trap.h"
 #include "virtio_disk.h"
 #include "vm.h"
