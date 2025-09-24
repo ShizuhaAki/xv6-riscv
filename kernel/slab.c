@@ -41,11 +41,6 @@ static void slab_add_head(struct slab **list, struct slab *slab) {
 
 // Create a new slab for the given cache
 static struct slab *slab_create(struct kmem_cache *cache) {
-  // If object is larger than page size, we can't create a slab
-  if (cache->objsize > PGSIZE) {
-    return 0;
-  }
-
   // Allocate a page from kalloc
   char *page = (char *)kalloc();
   if (!page) {
@@ -66,8 +61,8 @@ static struct slab *slab_create(struct kmem_cache *cache) {
   slab->nr_free = slab->nr_objs;
   slab->next = 0;
 
-  // Build freelist - store pointers in the first 8 bytes of each object
-  // This is safe because we're using the object space for freelist management
+  // Build freelist as a single linked list
+  // Each object's first 8 bytes store pointer to next free object
   for (uint i = 0; i < slab->nr_objs; i++) {
     char *obj = page + i * cache->objsize;
     if (i == slab->nr_objs - 1) {
@@ -79,8 +74,8 @@ static struct slab *slab_create(struct kmem_cache *cache) {
     }
   }
 
-  // Initialize freelist - point to the first object
-  slab->freelist = (void *)page;
+  // Initialize freelist - point to the first object's pointer
+  slab->freelist = page;
 
   return slab;
 }
@@ -96,11 +91,25 @@ static void slab_destroy(struct slab *slab) {
   kfree(slab);
 }
 
+static inline void free_push(struct slab *s, void *obj) {
+  *(void **)obj = s->freelist;  // write next pointer to free object
+  s->freelist = obj;
+  s->nr_free++;
+}
+
+static inline void *free_pop(struct slab *s) {
+  void *obj = s->freelist;
+  if (!obj) return 0;
+  s->freelist = *(void **)obj;  // read next pointer from free object
+  s->nr_free--;
+  return obj;
+}
+
 // Create a cache for objects of given size
 struct kmem_cache *kmem_cache_create(const char *name, uint objsize,
                                      void (*ctor)(void *), void (*dtor)(void *),
                                      uint align) {
-  if (!name || objsize < MIN_OBJ_SIZE) {
+  if (!name || objsize < MIN_OBJ_SIZE || objsize > PGSIZE) {
     return 0;
   }
 
@@ -170,9 +179,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
   // Fast path: try partial slabs first
   if (cache->partial) {
     slab = cache->partial;
-    obj = slab->freelist;
-    slab->freelist = *(void **)slab->freelist;
-    slab->nr_free--;
+    obj = free_pop(slab);
 
     // If slab is now full, move to full list
     if (slab->nr_free == 0) {
@@ -183,9 +190,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
   // Try empty slabs
   else if (cache->empty) {
     slab = cache->empty;
-    obj = slab->freelist;
-    slab->freelist = *(void **)slab->freelist;
-    slab->nr_free--;
+    obj = free_pop(slab);
 
     // Move to partial list
     slab_remove(&cache->empty, slab);
@@ -199,9 +204,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
       return 0;
     }
 
-    obj = slab->freelist;
-    slab->freelist = *(void **)slab->freelist;
-    slab->nr_free--;
+    obj = free_pop(slab);
 
     // Add to partial list
     slab_add_head(&cache->partial, slab);
@@ -267,10 +270,8 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj) {
     return;
   }
 
-  // Add object back to freelist
-  *(void **)obj = slab->freelist;
-  slab->freelist = obj;
-  slab->nr_free++;
+  // Add object back to freelist (insert at head)
+  free_push(slab, obj);
 
   // Move slab between lists based on its state
   if (slab->nr_free == 1) {
@@ -319,17 +320,23 @@ void slab_test_single_batched_alloc_and_free(void) {
 
   int iter;
   for (iter = 0; iter < OBJ_NUM; iter++) {
-    void *obj[BATCH_SIZE];
+    void **obj = (void **)kalloc();
+    if (!obj) {
+      printf("Failed to allocate temp array\n");
+      return;
+    }
     for (int i = 0; i < BATCH_SIZE; i++) {
       obj[i] = kmem_cache_alloc(cache);
       if (!obj[i]) {
         printf("Failed to allocate object %d in iter %d\n", i, iter);
+        kfree((void *)obj);
         return;
       }
     }
     for (int i = 0; i < BATCH_SIZE; i++) {
       kmem_cache_free(cache, obj[i]);
     }
+    kfree((void *)obj);
   }
 }
 
@@ -345,17 +352,23 @@ void slab_test_single_undividible_batched_alloc_and_free(void) {
 
   int iter;
   for (iter = 0; iter < OBJ_NUM; iter++) {
-    void *obj[BATCH_SIZE];
+    void **obj = (void **)kalloc();
+    if (!obj) {
+      printf("Failed to allocate temp array\n");
+      return;
+    }
     for (int i = 0; i < BATCH_SIZE; i++) {
       obj[i] = kmem_cache_alloc(cache);
       if (!obj[i]) {
         printf("Failed to allocate object %d in iter %d\n", i, iter);
+        kfree((void *)obj);
         return;
       }
     }
     for (int i = 0; i < BATCH_SIZE; i++) {
       kmem_cache_free(cache, obj[i]);
     }
+    kfree((void *)obj);
   }
 }
 
@@ -371,17 +384,23 @@ void slab_test_single_big_batch_alloc_and_free(void) {
 
   int iter;
   for (iter = 0; iter < OBJ_NUM; iter++) {
-    void *obj[BATCH_SIZE];
+    void **obj = (void **)kalloc();
+    if (!obj) {
+      printf("Failed to allocate temp array\n");
+      return;
+    }
     for (int i = 0; i < BATCH_SIZE; i++) {
       obj[i] = kmem_cache_alloc(cache);
       if (!obj[i]) {
         printf("Failed to allocate object %d in iter %d\n", i, iter);
+        kfree((void *)obj);
         return;
       }
     }
     for (int i = 0; i < BATCH_SIZE; i++) {
       kmem_cache_free(cache, obj[i]);
     }
+    kfree((void *)obj);
   }
 }
 
@@ -392,22 +411,28 @@ void slab_test_single_huge_batch_alloc_and_free(void) {
     return;
   }
 
-  const int BATCH_SIZE = 1024;
+  const int BATCH_SIZE = 512;
   const int OBJ_NUM = 1024 / BATCH_SIZE;
 
   int iter;
   for (iter = 0; iter < OBJ_NUM; iter++) {
-    void *obj[BATCH_SIZE];
+    void **obj = (void **)kalloc();
+    if (!obj) {
+      printf("Failed to allocate temp array\n");
+      return;
+    }
     for (int i = 0; i < BATCH_SIZE; i++) {
       obj[i] = kmem_cache_alloc(cache);
       if (!obj[i]) {
         printf("Failed to allocate object\n");
+        kfree((void *)obj);
         return;
       }
     }
     for (int i = 0; i < BATCH_SIZE; i++) {
       kmem_cache_free(cache, obj[i]);
     }
+    kfree((void *)obj);
   }
 }
 
@@ -416,7 +441,7 @@ void (*slab_single_core_test[])(void) = {
     slab_test_single_batched_alloc_and_free,
     slab_test_single_undividible_batched_alloc_and_free,
     slab_test_single_big_batch_alloc_and_free,
-    // slab_test_single_huge_batch_alloc_and_free,
+    slab_test_single_huge_batch_alloc_and_free,
 };
 
 const int slab_single_core_test_num =

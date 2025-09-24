@@ -14,7 +14,7 @@ struct slab {
   char *mem;       // slab object area start address
   uint nr_objs;    // total number of objects
   uint nr_free;    // number of free objects
-  void *freelist;  // free object list (stack)
+  void *freelist;  // free object list (single linked list)
 };
 
 // Cache structure for each object type
