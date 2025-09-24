@@ -782,7 +782,7 @@ int slab_test_single_extreme_alloc(void) {
     return 0;
   }
 
-  const int MAX_ALLOCS = 1024;  // Try to allocate many objects
+  const int MAX_ALLOCS = PGSIZE / sizeof(void *);  // Bounded by one kalloc() page for pointer array capacity
   void **objs = (void **)kalloc();
   if (!objs) {
     printf("Failed to allocate temp array for extreme test\n");
@@ -801,9 +801,6 @@ int slab_test_single_extreme_alloc(void) {
     successful_allocs++;
     *(uint32 *)objs[i] = 0xCAFEBABE + i;
   }
-
-  printf("Successfully allocated %d objects in extreme test\n",
-         successful_allocs);
 
   // Verify all allocated objects
   for (int i = 0; i < successful_allocs; i++) {

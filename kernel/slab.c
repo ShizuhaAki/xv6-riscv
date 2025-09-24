@@ -5,15 +5,9 @@
 #include "riscv.h"
 #include "string.h"
 
-// Default alignment to cache line size (64 bytes)
-#define DEFAULT_ALIGN 64
-
-// Minimum object size to avoid fragmentation
-#define MIN_OBJ_SIZE 8
-
 // Helper function to align size
 static uint align_size(uint size, uint align) {
-  if (align == 0) align = DEFAULT_ALIGN;
+  if (align == 0) return size;
   return (size + align - 1) & ~(align - 1);
 }
 
@@ -74,7 +68,7 @@ static struct slab *slab_create(struct kmem_cache *cache) {
     }
   }
 
-  // Initialize freelist - point to the first object's pointer
+  // Initialize freelist - point to the first object
   slab->freelist = page;
 
   return slab;
@@ -109,8 +103,21 @@ static inline void *free_pop(struct slab *s) {
 struct kmem_cache *kmem_cache_create(const char *name, uint objsize,
                                      void (*ctor)(void *), void (*dtor)(void *),
                                      uint align) {
-  if (!name || objsize < MIN_OBJ_SIZE || objsize > PGSIZE) {
+  if (!name || objsize == 0) {
     return 0;
+  }
+
+  // Align the object size first
+  uint aligned_size = align_size(objsize, align);
+  
+  // Ensure the aligned size is valid
+  if (aligned_size > PGSIZE) {
+    return 0;
+  }
+  
+  // Ensure object is large enough to hold a freelist pointer
+  if (aligned_size < sizeof(void *)) {
+    aligned_size = sizeof(void *);
   }
 
   // Allocate cache structure
@@ -122,7 +129,7 @@ struct kmem_cache *kmem_cache_create(const char *name, uint objsize,
   // Initialize cache
   strncpy(cache->name, name, sizeof(cache->name) - 1);
   cache->name[sizeof(cache->name) - 1] = '\0';
-  cache->objsize = align_size(objsize, align);
+  cache->objsize = aligned_size;
   cache->align = align;
   cache->ctor = ctor;
   cache->dtor = dtor;
@@ -192,9 +199,14 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
     slab = cache->empty;
     obj = free_pop(slab);
 
-    // Move to partial list
+    // Remove from empty regardless
     slab_remove(&cache->empty, slab);
-    slab_add_head(&cache->partial, slab);
+    // Place based on remaining free count
+    if (slab->nr_free == 0) {
+      slab_add_head(&cache->full, slab);
+    } else {
+      slab_add_head(&cache->partial, slab);
+    }
   }
   // Create new slab
   else {
@@ -206,8 +218,12 @@ void *kmem_cache_alloc(struct kmem_cache *cache) {
 
     obj = free_pop(slab);
 
-    // Add to partial list
-    slab_add_head(&cache->partial, slab);
+    // Place new slab based on remaining free count
+    if (slab->nr_free == 0) {
+      slab_add_head(&cache->full, slab);
+    } else {
+      slab_add_head(&cache->partial, slab);
+    }
   }
 
   release(&cache->lock);
@@ -274,14 +290,15 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj) {
   free_push(slab, obj);
 
   // Move slab between lists based on its state
-  if (slab->nr_free == 1) {
+  if (slab->nr_free == slab->nr_objs) {
+    // Now empty
+    slab_remove(&cache->full, slab);
+    slab_remove(&cache->partial, slab);
+    slab_add_head(&cache->empty, slab);
+  } else if (slab->nr_free == 1) {
     // Was full, now partial
     slab_remove(&cache->full, slab);
     slab_add_head(&cache->partial, slab);
-  } else if (slab->nr_free == slab->nr_objs) {
-    // Now empty
-    slab_remove(&cache->partial, slab);
-    slab_add_head(&cache->empty, slab);
   }
 
   release(&cache->lock);
