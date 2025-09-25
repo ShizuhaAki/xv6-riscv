@@ -11,11 +11,13 @@
 // Simple synchronization primitives for multi-core testing
 static struct spinlock multi_test_lock;
 static volatile int test_should_start = 0;
+static volatile int test_should_end = 0;
 static volatile int current_test_errors = 0;
 
 // Helper functions
 static void reset_test_sync(void) {
   test_should_start = 0;
+  test_should_end = 0;
   current_test_errors = 0;
   __sync_synchronize();  // Ensure reset is visible to all CPUs
 }
@@ -27,6 +29,17 @@ static void signal_test_start(void) {
 
 static void wait_for_test_start(void) {
   while (!test_should_start) {
+    __sync_synchronize();
+  }
+}
+
+static void signal_test_end(void) {
+  test_should_end = 1;
+  __sync_synchronize();  // Ensure signal is visible to all CPUs
+}
+
+static void wait_for_test_end(void) {
+  while (!test_should_end) {
     __sync_synchronize();
   }
 }
@@ -91,17 +104,17 @@ int slab_test_multi_basic_concurrent(void) {
     kmem_cache_free(test_cache, obj);
   }
 
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
-
   // CPU 0 reports results and cleans up
   if (my_cpu == 0) {
     printf("Basic concurrent test: %d errors\n", current_test_errors);
     kmem_cache_destroy(test_cache);
     test_cache = 0;
+    signal_test_end();  // Signal other CPUs that test is complete
     return current_test_errors == 0 ? 1 : 0;
   }
 
+  // Other CPUs wait for test completion
+  wait_for_test_end();
   return 1;
 }
 
@@ -162,19 +175,19 @@ int slab_test_multi_race_condition(void) {
     }
   }
 
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
-
   if (my_cpu == 0) {
     printf("Race condition test: counter=%d, expected=%d, errors=%d\n",
            shared_counter, race_iterations * active_cpus, current_test_errors);
     kmem_cache_destroy(race_cache);
     race_cache = 0;
     shared_counter = 0;
+    signal_test_end();  // Signal other CPUs that test is complete
     // Allow some race-related counter inconsistency, but no memory corruption
     return current_test_errors < 10 ? 1 : 0;
   }
 
+  // Other CPUs wait for test completion
+  wait_for_test_end();
   return 1;
 }
 
@@ -264,9 +277,6 @@ int slab_test_multi_cache_sharing(void) {
     }
   }
 
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
-
   if (my_cpu == 0) {
     printf("Cache sharing test: %d objects allocated, %d errors\n",
            shared_index, current_test_errors);
@@ -282,9 +292,12 @@ int slab_test_multi_cache_sharing(void) {
     shared_cache = 0;
     shared_index = 0;
     phase1_done = 0;
+    signal_test_end();  // Signal other CPUs that test is complete
     return current_test_errors == 0 ? 1 : 0;
   }
 
+  // Other CPUs wait for test completion
+  wait_for_test_end();
   return 1;
 }
 
@@ -373,25 +386,22 @@ int slab_test_multi_memory_consistency(void) {
     __sync_synchronize();
   }
 
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
-
   // Free objects
   if (my_obj) {
     kmem_cache_free(consistency_cache, my_obj);
   }
-
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
 
   if (my_cpu == 0) {
     printf("Memory consistency test: %d errors\n", current_test_errors);
     kmem_cache_destroy(consistency_cache);
     consistency_cache = 0;
     init_done = 0;
+    signal_test_end();  // Signal other CPUs that test is complete
     return current_test_errors == 0 ? 1 : 0;
   }
 
+  // Other CPUs wait for test completion
+  wait_for_test_end();
   return 1;
 }
 
@@ -449,9 +459,6 @@ int slab_test_multi_performance(void) {
 
   __sync_fetch_and_add(&total_allocs, my_allocs);
 
-  // Simple synchronization: wait for a bit to let other CPUs finish
-  for (volatile int delay = 0; delay < 100000; delay++);
-
   if (my_cpu == 0) {
     uint64 time;
     asm volatile("rdtime %0" : "=r"(time));
@@ -463,9 +470,12 @@ int slab_test_multi_performance(void) {
 
     kmem_cache_destroy(perf_cache);
     perf_cache = 0;
+    signal_test_end();  // Signal other CPUs that test is complete
     return current_test_errors == 0 ? 1 : 0;
   }
 
+  // Other CPUs wait for test completion
+  wait_for_test_end();
   return 1;
 }
 
@@ -524,9 +534,6 @@ void slab_test_multi(void) {
         failed++;
         printf("Multi-core test %d failed\n", i);
       }
-
-      // Small delay between tests
-      for (volatile int delay = 0; delay < 50000; delay++);
     }
 
     printf("Slab multi-core tests: %d passed, %d failed\n", passed, failed);
@@ -535,9 +542,6 @@ void slab_test_multi(void) {
     // Other CPUs participate in individual tests
     for (int i = 0; i < slab_multi_core_test_num; i++) {
       slab_multi_core_test[i]();
-
-      // Small delay between tests
-      for (volatile int delay = 0; delay < 50000; delay++);
     }
   }
 }
