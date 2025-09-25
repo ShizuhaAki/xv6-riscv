@@ -41,35 +41,33 @@ static struct slab *slab_create(struct kmem_cache *cache) {
     return 0;
   }
 
+  uint slab_offset = align_size(sizeof(struct slab), cache->align);
+
   // Allocate slab structure
-  struct slab *slab = (struct slab *)kalloc();
-  if (!slab) {
-    kfree(page);
-    return 0;
-  }
+  struct slab *slab = (struct slab *)page;
 
   // Initialize slab
   slab->cache = cache;
-  slab->mem = page;
-  slab->nr_objs = PGSIZE / cache->objsize;
+  slab->mem = page + slab_offset;
+  slab->nr_objs = (PGSIZE - slab_offset) / cache->objsize;
   slab->nr_free = slab->nr_objs;
   slab->next = 0;
 
   // Build freelist as a single linked list
   // Each object's first 8 bytes store pointer to next free object
   for (uint i = 0; i < slab->nr_objs; i++) {
-    char *obj = page + i * cache->objsize;
+    char *obj = slab->mem + i * cache->objsize;
     if (i == slab->nr_objs - 1) {
       // Last object points to null
       *(void **)obj = 0;
     } else {
       // Point to next object
-      *(void **)obj = (void *)(page + (i + 1) * cache->objsize);
+      *(void **)obj = (void *)(slab->mem + (i + 1) * cache->objsize);
     }
   }
 
   // Initialize freelist - point to the first object
-  slab->freelist = page;
+  slab->freelist = slab->mem;
 
   return slab;
 }
@@ -77,9 +75,6 @@ static struct slab *slab_create(struct kmem_cache *cache) {
 // Destroy a slab and return its pages to kalloc
 static void slab_destroy(struct slab *slab) {
   if (!slab) return;
-
-  // Free the object area page (freelist is part of this page)
-  kfree(slab->mem);
 
   // Free the slab structure
   kfree(slab);
@@ -109,12 +104,12 @@ struct kmem_cache *kmem_cache_create(const char *name, uint objsize,
 
   // Align the object size first
   uint aligned_size = align_size(objsize, align);
-  
+
   // Ensure the aligned size is valid
-  if (aligned_size > PGSIZE) {
+  if (aligned_size > PGSIZE - align_size(sizeof(struct slab), align)) {
     return 0;
   }
-  
+
   // Ensure object is large enough to hold a freelist pointer
   if (aligned_size < sizeof(void *)) {
     aligned_size = sizeof(void *);
