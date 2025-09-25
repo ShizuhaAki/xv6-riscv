@@ -993,9 +993,9 @@ int slab_test_single_boundary_conditions(void) {
 
   // Test object size that results in exactly one object per page
   uint one_per_page_size =
-      PGSIZE - sizeof(void *);  // Leave room for freelist pointer
-  struct kmem_cache *single_cache = kmem_cache_create(
-      "single", one_per_page_size - sizeof(struct slab), 0, 0, 0);
+      PGSIZE - sizeof(struct slab);  // Leave room for slab struct
+  struct kmem_cache *single_cache =
+      kmem_cache_create("single", one_per_page_size, 0, 0, 0);
   if (!single_cache) {
     printf("Failed to create single-object-per-page cache\n");
     return 0;

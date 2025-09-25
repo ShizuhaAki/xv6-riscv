@@ -81,6 +81,16 @@ static void slab_destroy(struct slab *slab) {
 }
 
 static inline void free_push(struct slab *s, void *obj) {
+  // Validate that obj is within slab bounds
+  if (!obj || (char *)obj < s->mem || (char *)obj >= s->mem + PGSIZE) {
+    panic("free_push: object out of bounds");
+  }
+
+  // Ensure the object is properly aligned
+  if (((uint64)obj - (uint64)s->mem) % s->cache->objsize != 0) {
+    panic("free_push: object misaligned");
+  }
+
   *(void **)obj = s->freelist;  // write next pointer to free object
   s->freelist = obj;
   s->nr_free++;
