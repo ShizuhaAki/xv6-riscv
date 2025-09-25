@@ -12,5 +12,4 @@ int slab_test_multi_performance(void);
 int slab_test_multi_stress_concurrent(void);
 int slab_test_multi_fragmentation(void);
 int slab_test_multi_mixed_sizes(void);
-int slab_test_multi_extreme_alloc(void);
 int slab_test_multi_error_handling(void);

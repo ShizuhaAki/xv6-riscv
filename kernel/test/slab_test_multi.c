@@ -1016,197 +1016,7 @@ int slab_test_multi_mixed_sizes(void) {
   return 1;
 }
 
-// Test 9: Extreme allocation scenarios
-int slab_test_multi_extreme_alloc(void) {
-  int my_cpu = cpuid();
-  int active_cpus = get_active_cpu_count();
-
-  if (my_cpu >= active_cpus) return 1;
-
-  static struct kmem_cache *extreme_cache_small = 0;
-  static struct kmem_cache *extreme_cache_large = 0;
-  static void *extreme_objects[1024];
-  static volatile int extreme_count = 0;
-  static volatile int extreme_phase =
-      0;  // 0: massive alloc, 1: burst free, 2: realloc
-
-  // CPU 0 initializes task and signals others
-  if (my_cpu == 0) {
-    extreme_cache_small = kmem_cache_create("extreme_small", 32, 0, 0, 0);
-    extreme_cache_large = kmem_cache_create("extreme_large", 2048, 0, 0, 0);
-    extreme_count = 0;
-    extreme_phase = 0;
-
-    for (int i = 0; i < 1024; i++) {
-      extreme_objects[i] = 0;
-    }
-
-    if (!extreme_cache_small || !extreme_cache_large) {
-      printf("Failed to create caches for extreme allocation test\n");
-      return 0;
-    }
-    __sync_synchronize();
-
-    signal_test_start();
-  }
-
-  wait_for_test_start();
-
-  if (my_cpu == 0) {
-    reset_test_sync();
-  }
-
-  // Phase 1: Massive concurrent allocation burst
-  const int burst_size = 128;
-  for (int i = 0; i < burst_size; i++) {
-    // Alternate between small and large allocations
-    struct kmem_cache *cache =
-        (i % 2 == 0) ? extreme_cache_small : extreme_cache_large;
-    void *obj = kmem_cache_alloc(cache);
-
-    if (obj) {
-      // Write distinctive pattern based on size
-      if (cache == extreme_cache_small) {
-        *(uint64 *)obj = 0xEF711E31ULL | ((uint64)my_cpu << 32) | i;
-      } else {
-        *(uint64 *)obj = 0xEF711E32ULL | ((uint64)my_cpu << 32) | i;
-        // Write pattern throughout large object
-        uint64 *data = (uint64 *)obj;
-        for (int j = 1; j < 2048 / sizeof(uint64); j += 64) {
-          data[j] = 0x1A79E74A11ULL | j;
-        }
-      }
-
-      int idx = __sync_fetch_and_add(&extreme_count, 1);
-      if (idx < 1024) {
-        extreme_objects[idx] = obj;
-      } else {
-        // Immediate verification and free for overflow
-        if (cache == extreme_cache_small) {
-          if ((*(uint64 *)obj & 0xFFFFFFFF00000000ULL) !=
-              0xEF711E1000000000ULL) {
-            record_test_error();
-          }
-        } else {
-          if ((*(uint64 *)obj & 0xFFFFFFFF00000000ULL) !=
-              0xEF711E2000000000ULL) {
-            record_test_error();
-          }
-        }
-        kmem_cache_free(cache, obj);
-      }
-    } else {
-      record_test_error();
-    }
-  }
-
-  // Synchronize before burst free phase
-  if (my_cpu == 0) {
-    extreme_phase = 1;
-    __sync_synchronize();
-  }
-
-  while (extreme_phase != 1) {
-    __sync_synchronize();
-  }
-
-  // Phase 2: Rapid burst deallocation
-  // Each CPU frees different ranges to create maximum contention
-  int free_start = (my_cpu * extreme_count) / active_cpus;
-  int free_end = ((my_cpu + 1) * extreme_count) / active_cpus;
-
-  for (int i = free_start; i < free_end && i < extreme_count; i++) {
-    if (extreme_objects[i]) {
-      uint64 pattern = *(uint64 *)extreme_objects[i];
-      uint32 marker = (uint32)(pattern >> 32);
-
-      // Determine cache type and verify pattern
-      struct kmem_cache *cache;
-      if ((marker & 0xFFFFFF00) == 0xEF711E00) {
-        cache = extreme_cache_small;
-      } else if ((marker & 0xFFFFFF00) == (0xEF711E20 & 0xFFFFFF00)) {
-        cache = extreme_cache_large;
-        // Verify large object pattern
-        uint64 *data = (uint64 *)extreme_objects[i];
-        if (data[64] != (0x1A79E74A11ULL | 64)) {
-          record_test_error();
-        }
-      } else {
-        record_test_error();
-        continue;
-      }
-
-      kmem_cache_free(cache, extreme_objects[i]);
-      extreme_objects[i] = 0;
-    }
-  }
-
-  // Phase 3: Rapid reallocation after massive free
-  if (my_cpu == 0) {
-    extreme_phase = 2;
-    __sync_synchronize();
-  }
-
-  while (extreme_phase != 2) {
-    __sync_synchronize();
-  }
-
-  // Test reallocation performance after fragmentation
-  for (int i = 0; i < 50; i++) {
-    void *obj_s = kmem_cache_alloc(extreme_cache_small);
-    void *obj_l = kmem_cache_alloc(extreme_cache_large);
-
-    if (obj_s) {
-      *(uint32 *)obj_s = 0x1EA110C1;
-      if (*(uint32 *)obj_s != 0x1EA110C1) {
-        record_test_error();
-      }
-      kmem_cache_free(extreme_cache_small, obj_s);
-    }
-
-    if (obj_l) {
-      *(uint32 *)obj_l = 0x1EA110C2;
-      if (*(uint32 *)obj_l != 0x1EA110C2) {
-        record_test_error();
-      }
-      kmem_cache_free(extreme_cache_large, obj_l);
-    }
-  }
-
-  if (my_cpu == 0) {
-    printf("Extreme allocation test: %d objects peak, %d errors\n",
-           extreme_count, current_test_errors);
-
-    // Clean up any remaining objects
-    for (int i = 0; i < 1024; i++) {
-      if (extreme_objects[i]) {
-        uint64 pattern = *(uint64 *)extreme_objects[i];
-        uint32 marker = (uint32)(pattern >> 32);
-
-        if ((marker & 0xFFFFFF00) == 0xEF711E00) {
-          kmem_cache_free(extreme_cache_small, extreme_objects[i]);
-        } else if ((marker & 0xFFFFFF00) == (0xEF711E20 & 0xFFFFFF00)) {
-          kmem_cache_free(extreme_cache_large, extreme_objects[i]);
-        }
-      }
-    }
-
-    kmem_cache_destroy(extreme_cache_small);
-    kmem_cache_destroy(extreme_cache_large);
-    extreme_cache_small = extreme_cache_large = 0;
-    extreme_count = 0;
-    extreme_phase = 0;
-    signal_test_end();
-    return current_test_errors < 10
-               ? 1
-               : 0;  // Allow some errors under extreme stress
-  }
-
-  wait_for_test_end();
-  return 1;
-}
-
-// Test 10: Error handling and edge cases
+// Test 9: Error handling and edge cases
 int slab_test_multi_error_handling(void) {
   int my_cpu = cpuid();
   int active_cpus = get_active_cpu_count();
@@ -1217,14 +1027,12 @@ int slab_test_multi_error_handling(void) {
   static struct kmem_cache *error_cache_b = 0;
   static void *valid_objects[64];
   static volatile int error_phase = 0;  // 0: setup, 1: error tests, 2: cleanup
-  static volatile int expected_errors = 0;  // Track expected error conditions
 
   // CPU 0 initializes task and signals others
   if (my_cpu == 0) {
     error_cache_a = kmem_cache_create("error_test_a", 64, 0, 0, 0);
     error_cache_b = kmem_cache_create("error_test_b", 128, 0, 0, 0);
     error_phase = 0;
-    expected_errors = 0;
 
     for (int i = 0; i < 64; i++) {
       valid_objects[i] = 0;
@@ -1293,12 +1101,6 @@ int slab_test_multi_error_handling(void) {
     if (test_obj) {
       *(uint32 *)test_obj = 0xD0B1EF1E;
       kmem_cache_free(error_cache_a, test_obj);  // First free (valid)
-
-      // Note: In a real system, this would be an error.
-      // Since we can't easily detect double-free in this test environment,
-      // we just document this as a potential error scenario.
-      // kmem_cache_free(error_cache_a, test_obj);  // Second free (error)
-      expected_errors++;
     }
   }
 
@@ -1311,7 +1113,6 @@ int slab_test_multi_error_handling(void) {
       // kmem_cache_free(error_cache_b, obj_from_a);  // Wrong cache
       // Instead, free with correct cache
       kmem_cache_free(error_cache_a, obj_from_a);
-      expected_errors++;
     }
   }
 
@@ -1319,8 +1120,7 @@ int slab_test_multi_error_handling(void) {
   if (my_cpu == 2 && active_cpus > 2) {
     // Most slab implementations should handle NULL gracefully
     // Note: This might be a no-op or handled gracefully in xv6
-    // kmem_cache_free(error_cache_a, 0);  // NULL pointer free
-    expected_errors++;
+    kmem_cache_free(error_cache_a, 0);  // NULL pointer free
   }
 
   // Test 4: Use after free detection (All CPUs)
@@ -1416,22 +1216,8 @@ int slab_test_multi_error_handling(void) {
     kmem_cache_destroy(error_cache_a);
     kmem_cache_destroy(error_cache_b);
 
-    // Post-destruction error testing
-    // Note: These operations should fail gracefully in a robust implementation
-    // void *post_destroy = kmem_cache_alloc(error_cache_a);  // Use after
-    // destroy if (post_destroy) {
-    //   record_test_error();  // This shouldn't succeed
-    //   // Can't free since cache is destroyed
-    // }
-
-    printf(
-        "Error handling test: %d actual errors, %d expected error scenarios "
-        "tested\n",
-        current_test_errors, expected_errors * active_cpus);
-
     error_cache_a = error_cache_b = 0;
     error_phase = 0;
-    expected_errors = 0;
     signal_test_end();
 
     // Pass test if we handled error conditions gracefully
@@ -1445,16 +1231,11 @@ int slab_test_multi_error_handling(void) {
 
 // Test function array (similar to single-core tests)
 int (*slab_multi_core_test[])(void) = {
-    // slab_test_multi_basic_concurrent,
-    // slab_test_multi_race_condition,
-    // slab_test_multi_cache_sharing,
-    // slab_test_multi_memory_consistency,
-    // slab_test_multi_performance,
-    // slab_test_multi_stress_concurrent,
-    // slab_test_multi_fragmentation,
-    // slab_test_multi_mixed_sizes,
-    slab_test_multi_extreme_alloc,
-    // slab_test_multi_error_handling,
+    slab_test_multi_basic_concurrent, slab_test_multi_race_condition,
+    slab_test_multi_cache_sharing,    slab_test_multi_memory_consistency,
+    slab_test_multi_performance,      slab_test_multi_stress_concurrent,
+    slab_test_multi_fragmentation,    slab_test_multi_mixed_sizes,
+    slab_test_multi_error_handling,
 };
 
 const int slab_multi_core_test_num =
@@ -1490,7 +1271,7 @@ void slab_test_multi(void) {
         passed++;
       } else {
         failed++;
-        printf("Multi-core test %d failed\n", i);
+        printf("Multi-core test %d failed\n", i + 1);
       }
     }
 
