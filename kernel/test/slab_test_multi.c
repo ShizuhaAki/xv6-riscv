@@ -53,7 +53,6 @@ static int get_active_cpu_count(void) { return 3; }
 // Test 1: Basic concurrent allocation/deallocation
 int slab_test_multi_basic_concurrent(void) {
   int my_cpu = cpuid();
-  printf("Cpu %d entered basic concurrent test\n", my_cpu);
   int active_cpus = get_active_cpu_count();
 
   if (my_cpu >= active_cpus) return 1;  // Skip extra CPUs
@@ -71,17 +70,14 @@ int slab_test_multi_basic_concurrent(void) {
 
     // Give cpu1 and cpu2 start signal
     signal_test_start();
-    printf("Cpu %d signaled start\n", my_cpu);
   }
 
   // All CPUs wait for start signal
   wait_for_test_start();
-  printf("Cpu %d passed wait for test start\n", my_cpu);
 
   // CPU 0 resets start signal at task beginning
   if (my_cpu == 0) {
     reset_test_sync();
-    printf("Cpu %d reset start signal\n", my_cpu);
   }
 
   // Each CPU performs allocations
@@ -106,7 +102,6 @@ int slab_test_multi_basic_concurrent(void) {
 
   // CPU 0 reports results and cleans up
   if (my_cpu == 0) {
-    printf("Basic concurrent test: %d errors\n", current_test_errors);
     kmem_cache_destroy(test_cache);
     test_cache = 0;
     signal_test_end();  // Signal other CPUs that test is complete
@@ -176,8 +171,6 @@ int slab_test_multi_race_condition(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Race condition test: counter=%d, expected=%d, errors=%d\n",
-           shared_counter, race_iterations * active_cpus, current_test_errors);
     kmem_cache_destroy(race_cache);
     race_cache = 0;
     shared_counter = 0;
@@ -278,9 +271,6 @@ int slab_test_multi_cache_sharing(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Cache sharing test: %d objects allocated, %d errors\n",
-           shared_index, current_test_errors);
-
     // Clean up remaining objects
     for (int i = 0; i < shared_index; i++) {
       if (shared_objects[i]) {
@@ -392,7 +382,6 @@ int slab_test_multi_memory_consistency(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Memory consistency test: %d errors\n", current_test_errors);
     kmem_cache_destroy(consistency_cache);
     consistency_cache = 0;
     init_done = 0;
@@ -564,7 +553,6 @@ int slab_test_multi_stress_concurrent(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Stress concurrent test: %d errors\n", current_test_errors);
     kmem_cache_destroy(stress_cache);
     stress_cache = 0;
     stress_phase = 3;
@@ -746,8 +734,6 @@ int slab_test_multi_fragmentation(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Fragmentation test: %d errors\n", current_test_errors);
-
     // Clean up any remaining objects
     for (int i = 0; i < 256; i++) {
       if (allocated_objects[i]) {
@@ -970,9 +956,6 @@ int slab_test_multi_mixed_sizes(void) {
   }
 
   if (my_cpu == 0) {
-    printf("Mixed sizes test: %d objects allocated, %d errors\n", mixed_count,
-           current_test_errors);
-
     // Clean up any remaining objects
     for (int i = 0; i < mixed_count; i++) {
       if (mixed_objects[i]) {
@@ -1105,7 +1088,7 @@ int slab_test_multi_error_handling(void) {
   }
 
   // Test 2: Cross-cache free attempts (CPU 1)
-  if (my_cpu == 1 && active_cpus > 1) {
+  if (my_cpu == 1) {
     void *obj_from_a = kmem_cache_alloc(error_cache_a);
     if (obj_from_a) {
       *(uint32 *)obj_from_a = 0xC105CACC;
@@ -1117,7 +1100,7 @@ int slab_test_multi_error_handling(void) {
   }
 
   // Test 3: NULL pointer handling (CPU 2)
-  if (my_cpu == 2 && active_cpus > 2) {
+  if (my_cpu == 2) {
     // Most slab implementations should handle NULL gracefully
     // Note: This might be a no-op or handled gracefully in xv6
     kmem_cache_free(error_cache_a, 0);  // NULL pointer free
@@ -1248,8 +1231,6 @@ void slab_test_multi(void) {
   // Initialize synchronization only once
   if (my_cpu == 0) {
     initlock(&multi_test_lock, "multi_test");
-    printf("\n=== Multi-Core Slab Allocator Tests ===\n");
-    printf("Testing with %d CPUs\n", get_active_cpu_count());
     __sync_synchronize();  // Signal initialization complete
   }
 
@@ -1264,8 +1245,6 @@ void slab_test_multi(void) {
   // Only CPU 0 runs the test orchestration
   if (my_cpu == 0) {
     for (int i = 0; i < slab_multi_core_test_num; i++) {
-      printf("Running multi-core test %d\n", i);
-
       int result = slab_multi_core_test[i]();
       if (result) {
         passed++;
@@ -1276,7 +1255,6 @@ void slab_test_multi(void) {
     }
 
     printf("Slab multi-core tests: %d passed, %d failed\n", passed, failed);
-    printf("======================================\n\n");
   } else {
     // Other CPUs participate in individual tests
     for (int i = 0; i < slab_multi_core_test_num; i++) {
