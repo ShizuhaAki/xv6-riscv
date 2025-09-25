@@ -7,6 +7,7 @@
 #include "printf.h"
 #include "proc.h"
 #include "slab.h"
+#include "spinlock.h"
 #include "test/slab_test_multi.h"
 #include "test/slab_test_single.h"
 #include "trap.h"
@@ -14,10 +15,13 @@
 #include "vm.h"
 
 volatile static int started = 0;
+volatile static int prepared_device = 0;
+struct spinlock prepared_device_lock;
 
 // start() jumps here in supervisor mode on all CPUs.
 void main() {
   if (cpuid() == 0) {
+    initlock(&prepared_device_lock, "prepared_device_lock");
     consoleinit();
     printfinit();
     printf("\n");
@@ -40,6 +44,9 @@ void main() {
     slab_test_single();
     __sync_synchronize();
     started = 1;
+    acquire(&prepared_device_lock);
+    prepared_device += 1;
+    release(&prepared_device_lock);
   } else {
     while (started == 0);
     __sync_synchronize();
@@ -47,8 +54,12 @@ void main() {
     kvminithart();   // turn on paging
     trapinithart();  // install kernel trap vector
     plicinithart();  // ask PLIC for device interrupts
+    acquire(&prepared_device_lock);
+    prepared_device += 1;
+    release(&prepared_device_lock);
   }
 
+  while (prepared_device < 3);
   slab_test_multi();
   scheduler();
 }
