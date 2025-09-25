@@ -54,5 +54,7 @@ void main() {
 
   while (prepared_device < 3);
   slab_test_multi();
+
+  for (;;);
   scheduler();
 }
