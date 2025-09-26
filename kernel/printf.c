@@ -124,3 +124,20 @@ void panic(char *s) {
 }
 
 void printfinit(void) { initlock(&pr.lock, "pr"); }
+
+// Print percentage with 2 decimal places (percent_x100 should be percentage *
+// 100) Example: print_percent(5025) prints "50.25%"
+void print_percent(uint64 percent_x100) {
+  uint64 whole = percent_x100 / 100;
+  uint64 frac = percent_x100 % 100;
+
+  printint(whole, 10, 0);
+  consputc('.');
+
+  // Ensure two digits for fractional part
+  if (frac < 10) {
+    consputc('0');
+  }
+  printint(frac, 10, 0);
+  consputc('%');
+}

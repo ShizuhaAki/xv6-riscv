@@ -21,6 +21,7 @@ OBJS = \
   $K/slab.o \
   $K/test/slab_test_single.o \
   $K/test/slab_test_multi.o \
+  $K/test/slab_test_benchmark.o \
   $K/bio.o \
   $K/fs.o \
   $K/log.o \

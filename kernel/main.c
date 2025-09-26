@@ -7,6 +7,7 @@
 #include "printf.h"
 #include "proc.h"
 #include "slab.h"
+#include "test/slab_test_benchmark.h"
 #include "test/slab_test_multi.h"
 #include "test/slab_test_single.h"
 #include "trap.h"
@@ -54,6 +55,10 @@ void main() {
 
   while (prepared_device < 3);
   slab_test_multi();
+
+  if (cpuid() == 0) {
+    slab_test_benchmark();
+  }
 
   scheduler();
 }
