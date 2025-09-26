@@ -23,7 +23,7 @@ Passed all the 29 tests.
 
 ## Statistics
 
-| Algorithm   | Throughput (ops/s) | Delay (cycles) | Memory Utilize Rate |
-| ----------- | ------------------ | -------------- | ------------------- |
-| Object Pool |                    |                |                     |
-| Slab        |                    |                |                     |
+| Algorithm   | Throughput (ops/s)   | Delay (cycles)  | Memory Utilize Rate |
+| ----------- | -------------------- | --------------- | ------------------- |
+| Object Pool | 59773                | 167             | 53.89%              |
+| Slab        | **1619083** (+2608%) | **6** (-96.40%) | **95.90%**          |
