@@ -999,7 +999,208 @@ int slab_test_multi_mixed_sizes(void) {
   return 1;
 }
 
-// Test 9: Error handling and edge cases
+// Specific destructors for different sizes
+static void safety_dtor_32(void *obj) {
+  if (obj) memset(obj, 0xDD, 32);
+}
+
+static void safety_dtor_64(void *obj) {
+  if (obj) memset(obj, 0xDD, 64);
+}
+
+static void safety_dtor_128(void *obj) {
+  if (obj) memset(obj, 0xDD, 128);
+}
+
+static void safety_dtor_256(void *obj) {
+  if (obj) memset(obj, 0xDD, 256);
+}
+
+static void safety_dtor_512(void *obj) {
+  if (obj) memset(obj, 0xDD, 512);
+}
+
+// Test 9: Memory safety test (multi-core)
+int slab_test_multi_safety(void) {
+  int my_cpu = cpuid();
+  int active_cpus = get_active_cpu_count();
+
+  if (my_cpu >= active_cpus) return 1;
+
+  static struct kmem_cache *safety_cache_32 = 0;
+  static struct kmem_cache *safety_cache_64 = 0;
+  static struct kmem_cache *safety_cache_128 = 0;
+  static struct kmem_cache *safety_cache_256 = 0;
+  static struct kmem_cache *safety_cache_512 = 0;
+  static volatile int safety_phase = 0;  // 0: init, 1: test, 2: cleanup
+
+  // CPU 0 initializes caches with different sizes and dtor
+  if (my_cpu == 0) {
+    // Create caches with no ctor but with size-specific dtors
+    safety_cache_32 = kmem_cache_create("safety_32", 32, 0, safety_dtor_32, 0);
+    safety_cache_64 = kmem_cache_create("safety_64", 64, 0, safety_dtor_64, 0);
+    safety_cache_128 =
+        kmem_cache_create("safety_128", 128, 0, safety_dtor_128, 0);
+    safety_cache_256 =
+        kmem_cache_create("safety_256", 256, 0, safety_dtor_256, 0);
+    safety_cache_512 =
+        kmem_cache_create("safety_512", 512, 0, safety_dtor_512, 0);
+
+    safety_phase = 0;
+
+    if (!safety_cache_32 || !safety_cache_64 || !safety_cache_128 ||
+        !safety_cache_256 || !safety_cache_512) {
+      printf("Failed to create caches for safety test\n");
+      return 0;
+    }
+    __sync_synchronize();
+
+    signal_test_start();
+  }
+
+  wait_for_test_start();
+
+  if (my_cpu == 0) {
+    reset_test_sync();
+  }
+
+  // Phase 1: Safety testing - allocate, check, mark, wait, free
+  struct kmem_cache *caches[] = {safety_cache_32, safety_cache_64,
+                                 safety_cache_128, safety_cache_256,
+                                 safety_cache_512};
+  int cache_sizes[] = {32, 64, 128, 256, 512};
+  int num_caches = 5;
+
+  const int iterations_per_cache = 50;
+
+  for (int cache_idx = 0; cache_idx < num_caches; cache_idx++) {
+    struct kmem_cache *cache = caches[cache_idx];
+    int size = cache_sizes[cache_idx];
+
+    for (int i = 0; i < iterations_per_cache; i++) {
+      void *obj = kmem_cache_alloc(cache);
+      if (!obj) {
+        record_test_error();
+        continue;
+      }
+
+      // Check for 0xAAAAAAAA pattern (should not exist in fresh memory)
+      uint32 *words = (uint32 *)obj;
+      int word_count = size / sizeof(uint32);
+
+      for (int w = 0; w < word_count; w++) {
+        if (words[w] == 0xAAAAAAAA) {
+          // Error: found previous allocation marker
+          record_test_error();
+          printf("CPU %d: Found 0xAAAAAAAA in fresh allocation from cache %d\n",
+                 my_cpu, cache_idx);
+        }
+      }
+
+      // Set memory to 0xAA pattern
+      memset(obj, 0xAA, size);
+
+      // Verify the pattern was set correctly
+      for (int w = 0; w < word_count; w++) {
+        if (words[w] != 0xAAAAAAAA) {
+          record_test_error();
+        }
+      }
+
+      // Random delay before freeing (simulate random usage time)
+      // Use a simple LFSR-based random delay
+      uint32 delay = ((my_cpu * 17 + i * 23) ^ (cache_idx * 31)) & 0xFF;
+      for (volatile uint32 d = 0; d < delay; d++) {
+        // Small delay
+      }
+
+      // Free the object (dtor will set to 0xDD)
+      kmem_cache_free(cache, obj);
+
+      // Small delay to let other CPUs potentially reuse this memory
+      for (volatile int wait = 0; wait < 10; wait++) {
+        __sync_synchronize();
+      }
+    }
+  }
+
+  // Phase 2: Additional stress testing - rapid allocation/free cycles
+  for (int stress_round = 0; stress_round < 10; stress_round++) {
+    for (int cache_idx = my_cpu % num_caches; cache_idx < num_caches;
+         cache_idx += active_cpus) {
+      struct kmem_cache *cache = caches[cache_idx];
+      int size = cache_sizes[cache_idx];
+
+      void *rapid_objs[20];
+      int allocated_count = 0;
+
+      // Rapid allocation
+      for (int r = 0; r < 20; r++) {
+        void *obj = kmem_cache_alloc(cache);
+        if (obj) {
+          // Quick safety check
+          uint32 *check_word = (uint32 *)obj;
+          if (*check_word == 0xAAAAAAAA) {
+            record_test_error();
+          }
+
+          // Mark and store
+          memset(obj, 0xAA, size);
+          rapid_objs[allocated_count++] = obj;
+        } else {
+          record_test_error();
+        }
+      }
+
+      // Random delay
+      uint32 stress_delay =
+          ((stress_round * 7 + my_cpu * 11) ^ cache_idx) & 0x3F;
+      for (volatile uint32 d = 0; d < stress_delay; d++) {
+        // Stress delay
+      }
+
+      // Rapid free
+      for (int r = 0; r < allocated_count; r++) {
+        if (rapid_objs[r]) {
+          kmem_cache_free(cache, rapid_objs[r]);
+          rapid_objs[r] = 0;
+        }
+      }
+    }
+  }
+
+  if (my_cpu == 0) {
+    safety_phase = 2;
+    __sync_synchronize();
+  }
+
+  while (safety_phase != 2) {
+    __sync_synchronize();
+  }
+
+  // Cleanup phase
+  if (my_cpu == 0) {
+    kmem_cache_destroy(safety_cache_32);
+    kmem_cache_destroy(safety_cache_64);
+    kmem_cache_destroy(safety_cache_128);
+    kmem_cache_destroy(safety_cache_256);
+    kmem_cache_destroy(safety_cache_512);
+
+    safety_cache_32 = safety_cache_64 = safety_cache_128 = 0;
+    safety_cache_256 = safety_cache_512 = 0;
+    safety_phase = 0;
+
+    signal_test_end();
+
+    printf("Safety test completed on CPU 0, errors: %d\n", current_test_errors);
+    return current_test_errors == 0 ? 1 : 0;
+  }
+
+  wait_for_test_end();
+  return 1;
+}
+
+// Test 10: Error handling and edge cases
 int slab_test_multi_error_handling(void) {
   int my_cpu = cpuid();
   int active_cpus = get_active_cpu_count();
@@ -1218,7 +1419,7 @@ int (*slab_multi_core_test[])(void) = {
     slab_test_multi_cache_sharing,    slab_test_multi_memory_consistency,
     slab_test_multi_performance,      slab_test_multi_stress_concurrent,
     slab_test_multi_fragmentation,    slab_test_multi_mixed_sizes,
-    slab_test_multi_error_handling,
+    slab_test_multi_error_handling,   slab_test_multi_safety,
 };
 
 const int slab_multi_core_test_num =
