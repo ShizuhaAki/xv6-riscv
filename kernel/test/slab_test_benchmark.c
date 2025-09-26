@@ -9,7 +9,7 @@
 #include "../string.h"
 
 // Benchmark configuration
-#define BENCHMARK_ITERATIONS 1000  // Reduced to prevent overload
+#define BENCHMARK_ITERATIONS 100000  // Reduced to prevent overload
 #define SMALL_OBJ_SIZE 32
 #define MEDIUM_OBJ_SIZE 128
 #define LARGE_OBJ_SIZE 512
@@ -25,11 +25,20 @@ static inline uint64 read_time(void) {
   return time;
 }
 
-// Simple object pool implementation for comparison
-struct simple_object_pool *object_pool_create(uint object_size,
-                                              uint pool_size) {
-  struct simple_object_pool *pool = (struct simple_object_pool *)kalloc();
-  if (!pool) return 0;
+// Simple random number generator for testing
+static uint32 rand_seed = 1;
+
+static uint32 simple_rand(void) {
+  rand_seed = rand_seed * 1103515245 + 12345;
+  return rand_seed;
+}
+
+static void seed_rand(uint32 seed) { rand_seed = seed; }
+
+// Helper function to allocate a new page for the pool
+static struct pool_page *pool_page_create(uint object_size) {
+  struct pool_page *page = (struct pool_page *)kalloc();
+  if (!page) return 0;
 
   // Ensure proper alignment for object_size
   if (object_size < sizeof(void *)) {
@@ -41,71 +50,162 @@ struct simple_object_pool *object_pool_create(uint object_size,
   uint objects_per_page = 4096 / object_size;
   if (objects_per_page == 0) {
     // Object too large for single page
-    kfree(pool);
+    kfree(page);
     return 0;
   }
 
-  // Limit pool size to what fits in one page
-  if (pool_size > objects_per_page) {
-    pool_size = objects_per_page;
-  }
-
-  pool->memory_base = kalloc();
-  if (!pool->memory_base) {
-    kfree(pool);
+  page->memory_base = kalloc();
+  if (!page->memory_base) {
+    kfree(page);
     return 0;
   }
-
-  pool->object_size = object_size;
-  pool->pool_size = pool_size;
-  pool->allocated_count = 0;
-  pool->free_count = pool_size;
 
   // Initialize free list - use another page for free list
-  pool->free_list = (void **)kalloc();
-  if (!pool->free_list) {
-    object_pool_destroy(pool);
+  page->free_list = (void **)kalloc();
+  if (!page->free_list) {
+    kfree(page->memory_base);
+    kfree(page);
     return 0;
   }
 
+  page->objects_per_page = objects_per_page;
+  page->free_count = objects_per_page;
+  page->next = 0;
+
   // Setup free list pointers with bounds checking
-  char *obj_ptr = (char *)pool->memory_base;
+  char *obj_ptr = (char *)page->memory_base;
   uint max_free_entries = 4096 / sizeof(void *);
-  uint entries_to_create =
-      (pool_size < max_free_entries) ? pool_size : max_free_entries;
+  uint entries_to_create = (objects_per_page < max_free_entries)
+                               ? objects_per_page
+                               : max_free_entries;
 
   for (uint i = 0; i < entries_to_create; i++) {
-    pool->free_list[i] = obj_ptr;
+    page->free_list[i] = obj_ptr;
     obj_ptr += object_size;
   }
+
+  return page;
+}
+
+// Helper function to destroy a page
+static void pool_page_destroy(struct pool_page *page) {
+  if (!page) return;
+
+  if (page->memory_base) kfree(page->memory_base);
+  if (page->free_list) kfree(page->free_list);
+  kfree(page);
+}
+
+// Simple object pool implementation for comparison (now supports multiple
+// pages)
+struct simple_object_pool *object_pool_create(uint object_size,
+                                              uint pool_size) {
+  struct simple_object_pool *pool = (struct simple_object_pool *)kalloc();
+  if (!pool) return 0;
+
+  // Ensure proper alignment for object_size
+  if (object_size < sizeof(void *)) {
+    object_size = sizeof(void *);
+  }
+  object_size = (object_size + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
+
+  pool->object_size = object_size;
+  pool->total_allocated_count = 0;
+  pool->total_free_count = 0;
+  pool->page_count = 0;
+  pool->pages = 0;
+
+  // Create the first page
+  struct pool_page *first_page = pool_page_create(object_size);
+  if (!first_page) {
+    kfree(pool);
+    return 0;
+  }
+
+  pool->pages = first_page;
+  pool->page_count = 1;
+  pool->total_free_count = first_page->free_count;
 
   return pool;
 }
 
 void *object_pool_alloc(struct simple_object_pool *pool) {
-  if (!pool || pool->free_count == 0 || pool->free_count > pool->pool_size)
-    return 0;
+  if (!pool) return 0;
 
-  pool->free_count--;
-  void *obj = pool->free_list[pool->free_count];
-  pool->allocated_count++;
+  // Find a page with free objects
+  struct pool_page *current_page = pool->pages;
+  while (current_page) {
+    if (current_page->free_count > 0) {
+      // Found a page with free objects
+      current_page->free_count--;
+      void *obj = current_page->free_list[current_page->free_count];
+      pool->total_allocated_count++;
+      pool->total_free_count--;
+      return obj;
+    }
+    current_page = current_page->next;
+  }
+
+  // All pages are full, allocate a new page
+  struct pool_page *new_page = pool_page_create(pool->object_size);
+  if (!new_page) {
+    return 0;  // Failed to allocate new page
+  }
+
+  // Add new page to the front of the list
+  new_page->next = pool->pages;
+  pool->pages = new_page;
+  pool->page_count++;
+  pool->total_free_count += new_page->free_count;
+
+  // Allocate from the new page
+  new_page->free_count--;
+  void *obj = new_page->free_list[new_page->free_count];
+  pool->total_allocated_count++;
+  pool->total_free_count--;
 
   return obj;
 }
 
 void object_pool_free(struct simple_object_pool *pool, void *obj) {
-  if (!pool || !obj || pool->free_count >= pool->pool_size) return;
+  if (!pool || !obj) return;
 
-  pool->free_list[pool->free_count] = obj;
-  pool->free_count++;
-  pool->allocated_count--;
+  // Find which page this object belongs to
+  struct pool_page *current_page = pool->pages;
+  while (current_page) {
+    char *page_start = (char *)current_page->memory_base;
+    char *page_end = page_start + 4096;  // Page size
+
+    if ((char *)obj >= page_start && (char *)obj < page_end) {
+      // Found the correct page
+      if (current_page->free_count >= current_page->objects_per_page) {
+        // Page is already full of free objects, something's wrong
+        return;
+      }
+
+      current_page->free_list[current_page->free_count] = obj;
+      current_page->free_count++;
+      pool->total_allocated_count--;
+      pool->total_free_count++;
+      return;
+    }
+    current_page = current_page->next;
+  }
+
+  // Object doesn't belong to any page in this pool - ignore
 }
 
 void object_pool_destroy(struct simple_object_pool *pool) {
   if (!pool) return;
 
-  if (pool->memory_base) kfree(pool->memory_base);
-  if (pool->free_list) kfree(pool->free_list);
+  // Destroy all pages
+  struct pool_page *current_page = pool->pages;
+  while (current_page) {
+    struct pool_page *next_page = current_page->next;
+    pool_page_destroy(current_page);
+    current_page = next_page;
+  }
+
   kfree(pool);
 }
 
@@ -177,7 +277,7 @@ int benchmark_compare_throughput(void) {
 
   kmem_cache_destroy(cache);
 
-  // Test object pool
+  // Test object pool with massive allocation + random deallocation
   struct simple_object_pool *pool =
       object_pool_create(MEDIUM_OBJ_SIZE, POOL_SIZE);
   if (!pool) {
@@ -185,22 +285,94 @@ int benchmark_compare_throughput(void) {
     return 0;
   }
 
+  // Allocate space for tracking allocated objects
+  void **allocated_objects = (void **)kalloc();
+  if (!allocated_objects) {
+    printf("Failed to allocate tracking array\n");
+    object_pool_destroy(pool);
+    return 0;
+  }
+
+  const int max_objects =
+      4096 / sizeof(void *);  // Max pointers that fit in a page
+  int allocated_count = 0;
+
+  seed_rand((uint32)read_time());  // Seed with current time
+
   start_time = read_time();
-  for (int i = 0; i < BENCHMARK_ITERATIONS && i < POOL_SIZE; i++) {
+  int total_ops = 0;
+
+  // Phase 1: Massive allocation
+  printf("  Pool: Massive allocation phase...\n");
+  for (int i = 0; i < BENCHMARK_ITERATIONS && allocated_count < max_objects;
+       i++) {
     void *obj = object_pool_alloc(pool);
     if (obj) {
+      allocated_objects[allocated_count] = obj;
       *(uint32 *)obj = i;  // Simulate work
-      object_pool_free(pool, obj);
+      allocated_count++;
+      total_ops++;
     }
   }
+
+  // Phase 2: Random deallocation (free 60% randomly)
+  printf("  Pool: Random deallocation phase (%d objects)...\n",
+         allocated_count);
+  int to_free = allocated_count * 6 / 10;  // Free 60%
+  for (int i = 0; i < to_free; i++) {
+    if (allocated_count > 0) {
+      int idx = simple_rand() % allocated_count;
+      if (allocated_objects[idx]) {
+        object_pool_free(pool, allocated_objects[idx]);
+        // Move last element to this position
+        allocated_objects[idx] = allocated_objects[allocated_count - 1];
+        allocated_count--;
+        total_ops++;
+      }
+    }
+  }
+
+  // Phase 3: Mixed allocation/deallocation
+  printf("  Pool: Mixed allocation/deallocation phase...\n");
+  for (int round = 0; round < 10; round++) {
+    // Allocate some
+    for (int i = 0; i < 100 && allocated_count < max_objects; i++) {
+      void *obj = object_pool_alloc(pool);
+      if (obj) {
+        allocated_objects[allocated_count] = obj;
+        *(uint32 *)obj = round * 100 + i;
+        allocated_count++;
+        total_ops++;
+      }
+    }
+
+    // Randomly free some
+    int to_free_now = (allocated_count > 50) ? 30 : allocated_count / 3;
+    for (int i = 0; i < to_free_now && allocated_count > 0; i++) {
+      int idx = simple_rand() % allocated_count;
+      if (allocated_objects[idx]) {
+        object_pool_free(pool, allocated_objects[idx]);
+        allocated_objects[idx] = allocated_objects[allocated_count - 1];
+        allocated_count--;
+        total_ops++;
+      }
+    }
+  }
+
   end_time = read_time();
 
-  int pool_ops =
-      (BENCHMARK_ITERATIONS < POOL_SIZE) ? BENCHMARK_ITERATIONS : POOL_SIZE;
-  calculate_performance_metrics(start_time, end_time, pool_ops * 2,
-                                pool_ops * MEDIUM_OBJ_SIZE,
-                                POOL_SIZE * sizeof(void *), &pool_metrics);
+  // Clean up remaining objects
+  for (int i = 0; i < allocated_count; i++) {
+    if (allocated_objects[i]) {
+      object_pool_free(pool, allocated_objects[i]);
+    }
+  }
 
+  calculate_performance_metrics(start_time, end_time, total_ops,
+                                total_ops * MEDIUM_OBJ_SIZE / 4,
+                                pool->page_count * 4096, &pool_metrics);
+
+  kfree(allocated_objects);
   object_pool_destroy(pool);
 
   // Print comparison
@@ -256,7 +428,7 @@ int benchmark_compare_latency(void) {
 
   kmem_cache_destroy(cache);
 
-  // Test pool latency
+  // Test pool latency with random allocation/deallocation patterns
   struct simple_object_pool *pool =
       object_pool_create(MEDIUM_OBJ_SIZE, POOL_SIZE);
   if (!pool) {
@@ -266,15 +438,76 @@ int benchmark_compare_latency(void) {
     return 0;
   }
 
-  for (int i = 0; i < samples && i < POOL_SIZE; i++) {
+  // Pre-allocate some objects to create fragmentation
+  void **pre_allocated = (void **)kalloc();
+  if (!pre_allocated) {
+    printf("Failed to allocate pre-allocation array\n");
+    object_pool_destroy(pool);
+    kfree(slab_latencies);
+    kfree(pool_latencies);
+    return 0;
+  }
+
+  seed_rand((uint32)read_time() + 12345);
+
+  // Pre-allocate objects to stress test the pool
+  int pre_alloc_count = 0;
+  const int max_pre_alloc = (4096 / sizeof(void *)) / 2;
+
+  for (int i = 0; i < max_pre_alloc; i++) {
+    void *obj = object_pool_alloc(pool);
+    if (obj) {
+      pre_allocated[pre_alloc_count] = obj;
+      *(uint32 *)obj = i;
+      pre_alloc_count++;
+    }
+  }
+
+  // Randomly free about half of them to create fragmentation
+  int to_free = pre_alloc_count / 2;
+  for (int i = 0; i < to_free; i++) {
+    if (pre_alloc_count > 0) {
+      int idx = simple_rand() % pre_alloc_count;
+      object_pool_free(pool, pre_allocated[idx]);
+      pre_allocated[idx] = pre_allocated[pre_alloc_count - 1];
+      pre_alloc_count--;
+    }
+  }
+
+  printf(
+      "  Pool: Testing latency with %d pre-allocated objects and "
+      "fragmentation...\n",
+      pre_alloc_count);
+
+  // Now measure allocation latencies in this fragmented state
+  for (int i = 0; i < samples; i++) {
     uint64 start = read_time();
     void *obj = object_pool_alloc(pool);
     uint64 end = read_time();
     pool_latencies[i] = end - start;
 
-    if (obj) object_pool_free(pool, obj);
+    // Randomly decide whether to free immediately or keep for later
+    if (obj) {
+      if ((simple_rand() % 3) == 0) {  // 33% chance to free immediately
+        object_pool_free(pool, obj);
+      } else if (pre_alloc_count < max_pre_alloc) {
+        // Keep it in our tracking array
+        pre_allocated[pre_alloc_count] = obj;
+        pre_alloc_count++;
+      } else {
+        object_pool_free(pool, obj);
+      }
+    }
   }
 
+  // Clean up remaining pre-allocated objects
+  for (int i = 0; i < pre_alloc_count; i++) {
+    if (pre_allocated[i]) {
+      object_pool_free(pool, pre_allocated[i]);
+    }
+  }
+
+  kfree(pre_allocated);
   object_pool_destroy(pool);
 
   // Calculate statistics
@@ -286,11 +519,9 @@ int benchmark_compare_latency(void) {
     if (slab_latencies[i] > slab_max) slab_max = slab_latencies[i];
     slab_total += slab_latencies[i];
 
-    if (i < POOL_SIZE) {
-      if (pool_latencies[i] < pool_min) pool_min = pool_latencies[i];
-      if (pool_latencies[i] > pool_max) pool_max = pool_latencies[i];
-      pool_total += pool_latencies[i];
-    }
+    if (pool_latencies[i] < pool_min) pool_min = pool_latencies[i];
+    if (pool_latencies[i] > pool_max) pool_max = pool_latencies[i];
+    pool_total += pool_latencies[i];
   }
 
   uint64 slab_avg = slab_total / samples;
@@ -355,7 +586,7 @@ int benchmark_compare_memory_efficiency(void) {
   }
   kmem_cache_destroy(cache);
 
-  // Test pool memory efficiency
+  // Test pool memory efficiency with stress pattern
   struct simple_object_pool *pool =
       object_pool_create(MEDIUM_OBJ_SIZE, POOL_SIZE);
   if (!pool) {
@@ -363,22 +594,83 @@ int benchmark_compare_memory_efficiency(void) {
     return 0;
   }
 
-  void *pool_objects[100];
-  int pool_allocated = 0;
-
-  for (int i = 0; i < test_objects && i < POOL_SIZE; i++) {
-    pool_objects[i] = object_pool_alloc(pool);
-    if (pool_objects[i]) pool_allocated++;
+  // Allocate tracking array for pool objects
+  void **pool_objects = (void **)kalloc();
+  if (!pool_objects) {
+    printf("Failed to allocate pool tracking array\n");
+    object_pool_destroy(pool);
+    return 0;
   }
+
+  seed_rand((uint32)read_time() + 54321);
+
+  const int max_pool_objects = 4096 / sizeof(void *);
+  int pool_allocated = 0;
+  int total_allocations = 0;
+
+  printf("  Pool: Stress testing memory efficiency...\n");
+
+  // Phase 1: Aggressive allocation to trigger page expansion
+  for (int i = 0; i < test_objects * 5 && pool_allocated < max_pool_objects;
+       i++) {
+    void *obj = object_pool_alloc(pool);
+    if (obj) {
+      pool_objects[pool_allocated] = obj;
+      *(uint32 *)obj = i;
+      pool_allocated++;
+      total_allocations++;
+    }
+  }
+
+  printf("  Pool: Allocated %d objects across %d pages\n", pool_allocated,
+         pool->page_count);
+
+  // Phase 2: Random deallocation pattern to create fragmentation
+  int deallocation_rounds = 3;
+  for (int round = 0; round < deallocation_rounds; round++) {
+    int to_free = pool_allocated / 3;  // Free 1/3 each round
+    printf("  Pool: Deallocation round %d - freeing %d objects\n", round + 1,
+           to_free);
+
+    for (int i = 0; i < to_free && pool_allocated > 0; i++) {
+      int idx = simple_rand() % pool_allocated;
+      if (pool_objects[idx]) {
+        object_pool_free(pool, pool_objects[idx]);
+        // Move last element to this position
+        pool_objects[idx] = pool_objects[pool_allocated - 1];
+        pool_allocated--;
+      }
+    }
+
+    // Reallocate some to test reuse
+    int to_realloc = to_free / 2;
+    for (int i = 0; i < to_realloc && pool_allocated < max_pool_objects; i++) {
+      void *obj = object_pool_alloc(pool);
+      if (obj) {
+        pool_objects[pool_allocated] = obj;
+        *(uint32 *)obj = round * 1000 + i;
+        pool_allocated++;
+        total_allocations++;
+      }
+    }
+  }
+
+  printf("  Pool: Final state - %d active objects, %d total pages\n",
+         pool_allocated, pool->page_count);
 
   uint64 pool_payload = pool_allocated * MEDIUM_OBJ_SIZE;
   uint64 pool_overhead =
-      POOL_SIZE * sizeof(void *) + sizeof(struct simple_object_pool);
+      pool->page_count * 4096 +                      // Memory pages
+      pool->page_count * 4096 +                      // Free list pages
+      pool->page_count * sizeof(struct pool_page) +  // Page structures
+      sizeof(struct simple_object_pool);             // Pool structure
 
   // Clean up pool objects
   for (int i = 0; i < pool_allocated; i++) {
     if (pool_objects[i]) object_pool_free(pool, pool_objects[i]);
   }
+
+  kfree(pool_objects);
   object_pool_destroy(pool);
 
   // Calculate efficiency
@@ -481,7 +773,7 @@ int benchmark_compare_mixed_workload(void) {
 
   kmem_cache_destroy(cache);
 
-  // Pool mixed workload
+  // Pool complex mixed workload with dynamic growth
   struct simple_object_pool *pool =
       object_pool_create(MEDIUM_OBJ_SIZE, POOL_SIZE);
   if (!pool) {
@@ -489,52 +781,145 @@ int benchmark_compare_mixed_workload(void) {
     return 0;
   }
 
-  void *pool_objects[100];
+  // Allocate multiple tracking arrays for different object lifetimes
+  void **short_lived = (void **)kalloc();   // Objects freed quickly
+  void **medium_lived = (void **)kalloc();  // Objects kept for medium term
+  void **long_lived = (void **)kalloc();    // Objects kept for long term
+
+  if (!short_lived || !medium_lived || !long_lived) {
+    printf("Failed to allocate pool tracking arrays\n");
+    if (short_lived) kfree(short_lived);
+    if (medium_lived) kfree(medium_lived);
+    if (long_lived) kfree(long_lived);
+    object_pool_destroy(pool);
+    return 0;
+  }
+
+  seed_rand((uint32)read_time() + 98765);
+
+  const int max_objects_per_array = (4096 / sizeof(void *)) / 3;
+  int short_count = 0, medium_count = 0, long_count = 0;
+
   start_time = read_time();
   int pool_ops = 0;
 
-  for (int round = 0; round < 10; round++) {  // Reduced iterations
-    // Allocate batch
-    for (int i = 0; i < 100 && pool->free_count > 0; i++) {
-      pool_objects[i] = object_pool_alloc(pool);
-      if (pool_objects[i]) {
-        *(uint32 *)pool_objects[i] = round * 100 + i;
+  printf("  Pool: Complex mixed workload with multiple object lifetimes...\n");
+
+  for (int round = 0; round < 20; round++) {  // More rounds for stress test
+    printf("  Pool: Round %d - Pages: %d, Objects: S=%d M=%d L=%d\n", round + 1,
+           pool->page_count, short_count, medium_count, long_count);
+
+    // Burst allocation phase
+    int burst_size = 50 + (simple_rand() % 100);  // Random burst size
+    for (int i = 0; i < burst_size; i++) {
+      void *obj = object_pool_alloc(pool);
+      if (obj) {
+        *(uint32 *)obj = round * 1000 + i;
+        pool_ops++;
+
+        // Randomly assign lifetime based on probability
+        uint32 lifetime_choice = simple_rand() % 100;
+        if (lifetime_choice < 60 && short_count < max_objects_per_array) {
+          // 60% short-lived (freed soon)
+          short_lived[short_count++] = obj;
+        } else if (lifetime_choice < 85 &&
+                   medium_count < max_objects_per_array) {
+          // 25% medium-lived
+          medium_lived[medium_count++] = obj;
+        } else if (long_count < max_objects_per_array) {
+          // 15% long-lived
+          long_lived[long_count++] = obj;
+        } else {
+          // Arrays full, free immediately
+          object_pool_free(pool, obj);
+          pool_ops++;
+        }
+      }
+    }
+
+    // Random short-lived object cleanup (80% probability)
+    if ((simple_rand() % 100) < 80) {
+      int to_free = short_count / 2 + (simple_rand() % (short_count / 2 + 1));
+      for (int i = 0; i < to_free && short_count > 0; i++) {
+        int idx = simple_rand() % short_count;
+        if (short_lived[idx]) {
+          object_pool_free(pool, short_lived[idx]);
+          short_lived[idx] = short_lived[short_count - 1];
+          short_count--;
+          pool_ops++;
+        }
+      }
+    }
+
+    // Occasional medium-lived cleanup (30% probability)
+    if ((simple_rand() % 100) < 30 && medium_count > 0) {
+      int to_free = medium_count / 4;
+      for (int i = 0; i < to_free && medium_count > 0; i++) {
+        int idx = simple_rand() % medium_count;
+        if (medium_lived[idx]) {
+          object_pool_free(pool, medium_lived[idx]);
+          medium_lived[idx] = medium_lived[medium_count - 1];
+          medium_count--;
+          pool_ops++;
+        }
+      }
+    }
+
+    // Rare long-lived cleanup (10% probability)
+    if ((simple_rand() % 100) < 10 && long_count > 0) {
+      int to_free = long_count / 6;
+      for (int i = 0; i < to_free && long_count > 0; i++) {
+        int idx = simple_rand() % long_count;
+        if (long_lived[idx]) {
+          object_pool_free(pool, long_lived[idx]);
+          long_lived[idx] = long_lived[long_count - 1];
+          long_count--;
+          pool_ops++;
+        }
+      }
+    }
+
+    // Random memory pressure simulation
+    if ((simple_rand() % 10) == 0) {
+      // Simulate memory pressure - free more aggressively
+      printf("  Pool: Simulating memory pressure...\n");
+      while (short_count > 0) {
+        object_pool_free(pool, short_lived[--short_count]);
         pool_ops++;
       }
-    }
-
-    // Free half
-    for (int i = 0; i < 50; i++) {
-      if (pool_objects[i]) {
-        object_pool_free(pool, pool_objects[i]);
-        pool_objects[i] = 0;
-        pool_ops++;
-      }
-    }
-
-    // Allocate more
-    for (int i = 0; i < 50 && pool->free_count > 0; i++) {
-      if (!pool_objects[i]) {
-        pool_objects[i] = object_pool_alloc(pool);
-        if (pool_objects[i]) pool_ops++;
-      }
-    }
-
-    // Free all
-    for (int i = 0; i < 100; i++) {
-      if (pool_objects[i]) {
-        object_pool_free(pool, pool_objects[i]);
-        pool_objects[i] = 0;
+      int medium_to_free = medium_count / 2;
+      for (int i = 0; i < medium_to_free && medium_count > 0; i++) {
+        object_pool_free(pool, medium_lived[--medium_count]);
         pool_ops++;
       }
     }
   }
 
   end_time = read_time();
-  calculate_performance_metrics(start_time, end_time, pool_ops,
-                                pool_ops * MEDIUM_OBJ_SIZE / 4,
-                                POOL_SIZE * sizeof(void *), &pool_metrics);
 
+  // Clean up all remaining objects
+  printf("  Pool: Cleaning up - S=%d M=%d L=%d objects\n", short_count,
+         medium_count, long_count);
+  for (int i = 0; i < short_count; i++) {
+    if (short_lived[i]) object_pool_free(pool, short_lived[i]);
+  }
+  for (int i = 0; i < medium_count; i++) {
+    if (medium_lived[i]) object_pool_free(pool, medium_lived[i]);
+  }
+  for (int i = 0; i < long_count; i++) {
+    if (long_lived[i]) object_pool_free(pool, long_lived[i]);
+  }
+
+  printf("  Pool: Final stats - %d pages used, %d total operations\n",
+         pool->page_count, pool_ops);
+
+  calculate_performance_metrics(start_time, end_time, pool_ops,
+                                pool_ops * MEDIUM_OBJ_SIZE / 6,
+                                pool->page_count * 4096, &pool_metrics);
+
+  kfree(short_lived);
+  kfree(medium_lived);
+  kfree(long_lived);
   object_pool_destroy(pool);
 
   // Print comparison

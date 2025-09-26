@@ -15,14 +15,22 @@ struct perf_metrics {
   uint64 memory_efficiency_percent_x100;  // efficiency * 100 as integer
 };
 
-// Object pool structure for comparison
+// Page structure for managing individual pages in the pool
+struct pool_page {
+  void *memory_base;       // Start of memory for this page
+  void **free_list;        // Free list for this page
+  uint free_count;         // Number of free objects in this page
+  uint objects_per_page;   // Maximum objects this page can hold
+  struct pool_page *next;  // Link to next page
+};
+
+// Object pool structure for comparison (now supports multiple pages)
 struct simple_object_pool {
-  void *memory_base;
+  struct pool_page *pages;  // Linked list of pages
   uint object_size;
-  uint pool_size;
-  uint allocated_count;
-  void **free_list;
-  uint free_count;
+  uint total_allocated_count;
+  uint total_free_count;
+  uint page_count;  // Number of allocated pages
 };
 
 // Benchmark test entry function
