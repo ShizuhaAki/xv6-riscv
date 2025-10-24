@@ -56,6 +56,15 @@
 //   fixed-size stack
 //   expandable heap
 //   ...
+//   USYSCALL (read-only, contains struct usyscall)
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define USYSCALL (TRAPFRAME - PGSIZE)
+
+#ifndef __ASSEMBLER__
+// Shared data structure for fast syscalls
+struct usyscall {
+  int pid;  // Process ID
+};
+#endif
