@@ -265,6 +265,12 @@ typedef uint64 *pagetable_t;  // 512 PTEs
 #define PGROUNDUP(sz) (((sz) + PGSIZE - 1) & ~(PGSIZE - 1))
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE - 1))
 
+// Superpage (2MB page) support
+#define SUPERPGSIZE (2 * 1024 * 1024)  // 2MB superpage
+#define SUPERPGSHIFT 21                // bits of offset within a superpage
+#define SUPERPGROUNDUP(sz) (((sz) + SUPERPGSIZE - 1) & ~(SUPERPGSIZE - 1))
+#define SUPERPGROUNDDOWN(a) (((a)) & ~(SUPERPGSIZE - 1))
+
 #define PTE_V (1L << 0)  // valid
 #define PTE_R (1L << 1)
 #define PTE_W (1L << 2)

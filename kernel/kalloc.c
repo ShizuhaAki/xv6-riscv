@@ -25,9 +25,39 @@ struct {
   struct run *freelist;
 } kmem;
 
+// Superpage allocator for 2MB pages
+#define NSUPERPAGES 8  // Number of 2MB superpages to reserve
+
+struct superrun {
+  struct superrun *next;
+};
+
+struct {
+  struct spinlock lock;
+  struct superrun *freelist;
+  char *superpage_start;  // Start of reserved superpage region
+} supermem;
+
 void kinit() {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void *)PHYSTOP);
+  initlock(&supermem.lock, "supermem");
+
+  // Reserve 2MB-aligned region for superpages
+  // Start from the first 2MB-aligned address after 'end'
+  char *p = (char *)SUPERPGROUNDUP((uint64)end);
+  supermem.superpage_start = p;
+  supermem.freelist = 0;
+
+  // Add NSUPERPAGES 2MB pages to superpage freelist
+  for (int i = 0; i < NSUPERPAGES; i++) {
+    struct superrun *r = (struct superrun *)p;
+    r->next = supermem.freelist;
+    supermem.freelist = r;
+    p += SUPERPGSIZE;
+  }
+
+  // Free the rest to normal page allocator
+  freerange(p, (void *)PHYSTOP);
 }
 
 void freerange(void *pa_start, void *pa_end) {
@@ -72,4 +102,41 @@ void *kalloc(void) {
 
   if (r) memset((char *)r, 5, PGSIZE);  // fill with junk
   return (void *)r;
+}
+
+// Allocate one 2MB superpage of physical memory.
+// Returns a 2MB-aligned pointer that the kernel can use.
+// Returns 0 if the memory cannot be allocated.
+void *superalloc(void) {
+  struct superrun *r;
+
+  acquire(&supermem.lock);
+  r = supermem.freelist;
+  if (r) supermem.freelist = r->next;
+  release(&supermem.lock);
+
+  if (r) memset((char *)r, 0, SUPERPGSIZE);  // zero out the superpage
+  return (void *)r;
+}
+
+// Free a 2MB superpage of physical memory pointed at by pa.
+// pa must be 2MB-aligned.
+void superfree(void *pa) {
+  struct superrun *r;
+
+  if (((uint64)pa % SUPERPGSIZE) != 0 || (char *)pa < supermem.superpage_start ||
+      (uint64)pa >= (uint64)(supermem.superpage_start + NSUPERPAGES * SUPERPGSIZE)) {
+    printf("superfree bad pa=%p\n", pa);
+    panic("superfree");
+  }
+
+  // Fill with junk to catch dangling refs
+  memset(pa, 1, SUPERPGSIZE);
+
+  r = (struct superrun *)pa;
+
+  acquire(&supermem.lock);
+  r->next = supermem.freelist;
+  supermem.freelist = r;
+  release(&supermem.lock);
 }
