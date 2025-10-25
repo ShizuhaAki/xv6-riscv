@@ -35,3 +35,21 @@ Create the `.clang-format` file.
 ```bash
 clang-format -style=google -dump-config > .clang-format
 ```
+
+## Open Benchmarks
+
+### By default (tests OFF):
+
+```bash
+make clean
+make qemu
+```
+
+The kernel will boot normally without running any slab tests.
+
+### To enable tests:
+
+```bash
+make clean
+make CFLAGS="-DENABLE_SLAB_TESTS" qemu
+```
