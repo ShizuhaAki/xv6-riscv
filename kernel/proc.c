@@ -14,6 +14,8 @@
 #include "trap.h"
 #include "types.h"
 #include "vm.h"
+#include "fcntl.h"
+#include "sleeplock.h"
 
 struct cpu cpus[NCPU];
 
@@ -148,6 +150,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // Initialize VMAs
+  for (int i = 0; i < NVMA; i++) {
+    p->vmas[i].used = 0;
+  }
 
   return p;
 }
@@ -285,6 +292,15 @@ int kfork(void) {
     if (p->ofile[i]) np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // Copy VMAs from parent to child
+  for (i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used) {
+      np->vmas[i] = p->vmas[i];
+      // Increment file reference count
+      np->vmas[i].file = filedup(p->vmas[i].file);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -329,6 +345,58 @@ void kexit(int status) {
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  // Unmap all VMAs and write back MAP_SHARED regions
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used) {
+      struct vma *v = &p->vmas[i];
+
+      // Write back if MAP_SHARED (only allocated pages)
+      if (v->flags & MAP_SHARED) {
+        struct inode *ip = v->file->ip;
+
+        // Get file size
+        ilock(ip);
+        uint file_size = ip->size;
+        iunlock(ip);
+
+        for (uint64 va = v->addr; va < v->addr + v->len; va += PGSIZE) {
+          if (ismapped(p->pagetable, va)) {
+            uint64 offset_in_vma = va - v->addr;
+            uint64 file_offset = v->offset + offset_in_vma;
+
+            // Don't write beyond file size
+            if (file_offset >= file_size) {
+              continue;
+            }
+
+            // Calculate bytes to write
+            uint64 bytes_to_write = PGSIZE;
+            if (file_offset + bytes_to_write > file_size) {
+              bytes_to_write = file_size - file_offset;
+            }
+
+            if (bytes_to_write > 0) {
+              begin_op();
+              ilock(ip);
+              writei(ip, 1, va, file_offset, bytes_to_write);
+              iunlock(ip);
+              end_op();
+            }
+          }
+        }
+      }
+
+      // Unmap pages (only if they've been allocated)
+      uvmunmap(p->pagetable, v->addr, v->len / PGSIZE, 1);
+
+      // Close file
+      fileclose(v->file);
+
+      // Mark as unused
+      v->used = 0;
     }
   }
 

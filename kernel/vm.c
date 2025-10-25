@@ -7,6 +7,10 @@
 #include "riscv.h"
 #include "string.h"
 #include "types.h"
+#include "file.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -586,15 +590,67 @@ int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max) {
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
 // out of physical memory, and physical address if successful.
-uint64 vmfault(pagetable_t pagetable, uint64 va, int read) {
+uint64 vmfault(pagetable_t pagetable, uint64 va, int write) {
   uint64 mem;
   struct proc *p = myproc();
 
-  if (va >= p->sz) return 0;
   va = PGROUNDDOWN(va);
+
+  // Check if already mapped
   if (ismapped(pagetable, va)) {
     return 0;
   }
+
+  // Check if this is a mmap-ed region
+  struct vma *v = 0;
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].used &&
+        va >= p->vmas[i].addr &&
+        va < p->vmas[i].addr + p->vmas[i].len) {
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if (v) {
+    // This is a page fault in a mmap-ed region
+    // Allocate physical page
+    mem = (uint64)kalloc();
+    if (mem == 0) return 0;
+    memset((void *)mem, 0, PGSIZE);
+
+    // Read from file
+    uint64 offset_in_vma = va - v->addr;
+    uint64 file_offset = v->offset + offset_in_vma;
+
+    // Lock inode and read from file
+    struct inode *ip = v->file->ip;
+    ilock(ip);
+    int bytes_read = readi(ip, 0, mem, file_offset, PGSIZE);
+    iunlock(ip);
+
+    if (bytes_read < 0) {
+      kfree((void *)mem);
+      return 0;
+    }
+
+    // Map page with correct permissions
+    int perm = PTE_U;
+    if (v->prot & PROT_READ) perm |= PTE_R;
+    if (v->prot & PROT_WRITE) perm |= PTE_W;
+    if (v->prot & PROT_EXEC) perm |= PTE_X;
+
+    if (mappages(pagetable, va, PGSIZE, mem, perm) != 0) {
+      kfree((void *)mem);
+      return 0;
+    }
+
+    return mem;
+  }
+
+  // Handle lazy allocation (for sbrk)
+  if (va >= p->sz) return 0;
+
   mem = (uint64)kalloc();
   if (mem == 0) return 0;
   memset((void *)mem, 0, PGSIZE);
