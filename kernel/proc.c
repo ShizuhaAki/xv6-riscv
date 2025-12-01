@@ -156,6 +156,13 @@ found:
     p->vmas[i].used = 0;
   }
 
+  // Initialize signal fields
+  p->pending_signals = 0;
+  p->sig_tf_backup_valid = 0;
+  for (int i = 0; i < NSIG; i++) {
+    p->sig_handlers[i] = 0;
+  }
+
   return p;
 }
 
@@ -177,6 +184,12 @@ static void freeproc(struct proc *p) {
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  // Clear signal fields
+  p->pending_signals = 0;
+  p->sig_tf_backup_valid = 0;
+  for (int i = 0; i < NSIG; i++) {
+    p->sig_handlers[i] = 0;
+  }
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -299,6 +312,12 @@ int kfork(void) {
       // Increment file reference count
       np->vmas[i].file = filedup(p->vmas[i].file);
     }
+  }
+
+  // Copy signal handlers from parent to child
+  // (pending signals and backup are NOT copied - child starts fresh)
+  for (i = 0; i < NSIG; i++) {
+    np->sig_handlers[i] = p->sig_handlers[i];
   }
 
   safestrcpy(np->name, p->name, sizeof(p->name));

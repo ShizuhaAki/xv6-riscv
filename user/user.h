@@ -12,7 +12,7 @@ int pipe(int*);
 int write(int, const void*, int);
 int read(int, void*, int);
 int close(int);
-int kill(int);
+int kill(int, int);  // kill(pid, signum)
 int exec(const char*, char**);
 int open(const char*, int);
 int mknod(const char*, short, short);
@@ -28,6 +28,8 @@ int pause(int);
 int uptime(void);
 void* mmap(void*, int, int, int, int, int);
 int munmap(void*, int);
+int signal(int, void (*)(int));  // signal(signum, handler)
+int sigreturn(void);
 
 
 // ulib.c

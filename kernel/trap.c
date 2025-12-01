@@ -1,6 +1,7 @@
 #include "trap.h"
 
 #include "memlayout.h"
+#include "param.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
@@ -26,6 +27,62 @@ void trapinit(void) { initlock(&tickslock, "time"); }
 
 // set up to take exceptions and traps while in the kernel.
 void trapinithart(void) { w_stvec((uint64)kernelvec); }
+
+// Check for pending signals and dispatch signal handlers.
+// Called just before returning to user space.
+// Returns 1 if a signal handler was dispatched, 0 otherwise.
+static int handle_signals(void) {
+  struct proc *p = myproc();
+
+  // Don't handle signals if we're already in a signal handler
+  // (indicated by sig_tf_backup_valid being set)
+  if (p->sig_tf_backup_valid) {
+    return 0;
+  }
+
+  // Check for pending signals
+  if (p->pending_signals == 0) {
+    return 0;
+  }
+
+  // Find the first pending signal
+  for (int signum = 0; signum < NSIG; signum++) {
+    if (p->pending_signals & (1 << signum)) {
+      // SIGKILL cannot be caught - always terminate
+      if (signum == SIGKILL) {
+        p->pending_signals &= ~(1 << signum);
+        setkilled(p);
+        return 0;
+      }
+
+      void (*handler)(int) = p->sig_handlers[signum];
+
+      if (handler != 0) {
+        // Clear the pending signal
+        p->pending_signals &= ~(1 << signum);
+
+        // Backup the current trapframe
+        p->sig_tf_backup = *(p->trapframe);
+        p->sig_tf_backup_valid = 1;
+
+        // Set up the trapframe to call the signal handler
+        // The handler takes signum as argument (in a0)
+        p->trapframe->a0 = signum;
+
+        // Set epc to the handler address - when we return to user space,
+        // execution will begin at the handler
+        p->trapframe->epc = (uint64)handler;
+
+        return 1;
+      } else {
+        // No handler registered - clear the signal (default: ignore)
+        p->pending_signals &= ~(1 << signum);
+      }
+    }
+  }
+
+  return 0;
+}
 
 //
 // handle an interrupt, exception, or system call from user space.
@@ -76,6 +133,9 @@ uint64 usertrap(void) {
 
   // give up the CPU if this is a timer interrupt.
   if (which_dev == 2) yield();
+
+  // Check for pending signals before returning to user space
+  handle_signals();
 
   prepare_return();
 

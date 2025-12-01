@@ -72,9 +72,35 @@ uint64 sys_pause(void) {
 
 uint64 sys_kill(void) {
   int pid;
+  int signum;
 
   argint(0, &pid);
-  return kkill(pid);
+  argint(1, &signum);
+
+  // Validate signal number
+  if (signum < 0 || signum >= NSIG) {
+    return -1;
+  }
+
+  // Find target process and set pending signal
+  struct proc *p;
+  extern struct proc proc[];
+
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->pid == pid) {
+      // Set the pending signal bit
+      p->pending_signals |= (1 << signum);
+      // If process is sleeping, wake it up to handle signal
+      if (p->state == SLEEPING) {
+        p->state = RUNNABLE;
+      }
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;  // Process not found
 }
 
 // return how many clock tick interrupts have occurred
@@ -284,4 +310,43 @@ uint64 sys_munmap(void) {
   }
 
   return 0;
+}
+
+// Register a signal handler for a given signal number
+uint64 sys_signal(void) {
+  int signum;
+  uint64 handler;
+
+  argint(0, &signum);
+  argaddr(1, &handler);
+
+  // Validate signal number
+  if (signum < 0 || signum >= NSIG) {
+    return -1;
+  }
+
+  struct proc *p = myproc();
+  p->sig_handlers[signum] = (void (*)(int))handler;
+
+  return 0;
+}
+
+// Restore the process state after signal handler execution
+uint64 sys_sigreturn(void) {
+  struct proc *p = myproc();
+
+  // Check if we have a valid backup
+  if (!p->sig_tf_backup_valid) {
+    return -1;
+  }
+
+  // Restore the trapframe from backup
+  *(p->trapframe) = p->sig_tf_backup;
+
+  // Mark backup as invalid
+  p->sig_tf_backup_valid = 0;
+
+  // Return the value that was in a0 when the process was interrupted
+  // This ensures the process continues correctly from where it was
+  return p->trapframe->a0;
 }

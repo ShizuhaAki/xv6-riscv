@@ -128,6 +128,12 @@ struct proc {
   struct inode *cwd;            // Current directory
   char name[16];                // Process name (debugging)
   struct vma vmas[NVMA];        // Memory-mapped regions
+
+  // Signal-related fields
+  uint32 pending_signals;          // Bitmask of pending signals
+  void (*sig_handlers[NSIG])(int); // Signal handler function pointers
+  struct trapframe sig_tf_backup;  // Backup of trapframe for sigreturn
+  int sig_tf_backup_valid;         // Is sig_tf_backup valid?
 };
 
 int cpuid(void);
