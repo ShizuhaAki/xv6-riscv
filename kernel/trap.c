@@ -31,6 +31,9 @@ void trapinithart(void) { w_stvec((uint64)kernelvec); }
 // Check for pending signals and dispatch signal handlers.
 // Called just before returning to user space.
 // Returns 1 if a signal handler was dispatched, 0 otherwise.
+// Note: SIG_DFL (-1) means no handler registered (default action)
+#define SIG_DFL ((void (*)(int))-1)
+
 static int handle_signals(void) {
   struct proc *p = myproc();
 
@@ -57,7 +60,11 @@ static int handle_signals(void) {
 
       void (*handler)(int) = p->sig_handlers[signum];
 
-      if (handler != 0) {
+      if (handler == SIG_DFL) {
+        // No handler registered - default action: ignore (clear the signal)
+        p->pending_signals &= ~(1 << signum);
+      } else {
+        // User-defined handler (any valid address including 0x0)
         // Clear the pending signal
         p->pending_signals &= ~(1 << signum);
 
@@ -74,9 +81,6 @@ static int handle_signals(void) {
         p->trapframe->epc = (uint64)handler;
 
         return 1;
-      } else {
-        // No handler registered - clear the signal (default: ignore)
-        p->pending_signals &= ~(1 << signum);
       }
     }
   }
@@ -135,12 +139,14 @@ uint64 usertrap(void) {
   if (which_dev == 2) yield();
 
   // Check for pending signals before returning to user space
+  // Note: must re-fetch p since yield() may have changed the running process
   handle_signals();
 
   prepare_return();
 
   // the user page table to switch to, for trampoline.S
-  uint64 satp = MAKE_SATP(p->pagetable);
+  // Note: myproc() gives us the current process after potential yield
+  uint64 satp = MAKE_SATP(myproc()->pagetable);
 
   // return to trampoline.S; satp value in a0.
   return satp;

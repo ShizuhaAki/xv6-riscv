@@ -160,7 +160,7 @@ found:
   p->pending_signals = 0;
   p->sig_tf_backup_valid = 0;
   for (int i = 0; i < NSIG; i++) {
-    p->sig_handlers[i] = 0;
+    p->sig_handlers[i] = (void (*)(int))-1;  // SIG_IGN - no handler set
   }
 
   return p;
@@ -188,7 +188,7 @@ static void freeproc(struct proc *p) {
   p->pending_signals = 0;
   p->sig_tf_backup_valid = 0;
   for (int i = 0; i < NSIG; i++) {
-    p->sig_handlers[i] = 0;
+    p->sig_handlers[i] = (void (*)(int))-1;  // SIG_IGN - no handler set
   }
 }
 
