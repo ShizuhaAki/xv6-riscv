@@ -134,6 +134,11 @@ struct proc {
   void (*sig_handlers[NSIG])(int); // Signal handler function pointers
   struct trapframe sig_tf_backup;  // Backup of trapframe for sigreturn
   int sig_tf_backup_valid;         // Is sig_tf_backup valid?
+
+  // Kernel thread fields
+  int is_kthread;                // 1 if this is a kernel thread, 0 otherwise
+  void (*kthread_func)(void *);  // Kernel thread entry function
+  void *kthread_arg;             // Argument to kernel thread function
 };
 
 int cpuid(void);
@@ -159,6 +164,10 @@ void yield(void);
 int either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void procdump(void);
+
+// Kernel thread functions
+struct proc *kthread_create(void (*func)(void *), void *arg, char *name);
+void kthread_entry(void);
 
 // swtch.S
 void swtch(struct context *, struct context *);

@@ -3,6 +3,7 @@
 #include "file.h"
 #include "fs.h"
 #include "kalloc.h"
+#include "khugepaged.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
@@ -43,6 +44,7 @@ void main() {
     fileinit();          // file table
     virtio_disk_init();  // emulated hard disk
     userinit();          // first user process
+    khugepaged_init();   // start khugepaged daemon
 
 #ifdef ENABLE_SLAB_TESTS
     slab_test_single();

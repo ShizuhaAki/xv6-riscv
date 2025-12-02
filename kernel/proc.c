@@ -163,6 +163,11 @@ found:
     p->sig_handlers[i] = (void (*)(int))-1;  // SIG_IGN - no handler set
   }
 
+  // Initialize kthread fields
+  p->is_kthread = 0;
+  p->kthread_func = 0;
+  p->kthread_arg = 0;
+
   return p;
 }
 
@@ -174,7 +179,10 @@ static void freeproc(struct proc *p) {
   p->trapframe = 0;
   if (p->usyscall) kfree((void *)p->usyscall);
   p->usyscall = 0;
-  if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
+  // Only free user page table for non-kthread processes
+  if (p->pagetable && !p->is_kthread) {
+    proc_freepagetable(p->pagetable, p->sz);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -190,6 +198,10 @@ static void freeproc(struct proc *p) {
   for (int i = 0; i < NSIG; i++) {
     p->sig_handlers[i] = (void (*)(int))-1;  // SIG_IGN - no handler set
   }
+  // Clear kthread fields
+  p->is_kthread = 0;
+  p->kthread_func = 0;
+  p->kthread_arg = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -281,6 +293,11 @@ int kfork(void) {
   struct proc *np;
   struct proc *p = myproc();
 
+  // Kernel threads cannot fork.
+  if (p->is_kthread) {
+    panic("kthread fork");
+  }
+
   // Allocate process.
   if ((np = allocproc()) == 0) {
     return -1;
@@ -358,78 +375,82 @@ void kexit(int status) {
 
   if (p == initproc) panic("init exiting");
 
-  // Close all open files.
-  for (int fd = 0; fd < NOFILE; fd++) {
-    if (p->ofile[fd]) {
-      struct file *f = p->ofile[fd];
-      fileclose(f);
-      p->ofile[fd] = 0;
+  // Kernel threads skip user-space resource cleanup.
+  if (!p->is_kthread) {
+    // Close all open files.
+    for (int fd = 0; fd < NOFILE; fd++) {
+      if (p->ofile[fd]) {
+        struct file *f = p->ofile[fd];
+        fileclose(f);
+        p->ofile[fd] = 0;
+      }
     }
-  }
 
-  // Unmap all VMAs and write back MAP_SHARED regions
-  for (int i = 0; i < NVMA; i++) {
-    if (p->vmas[i].used) {
-      struct vma *v = &p->vmas[i];
+    // Unmap all VMAs and write back MAP_SHARED regions
+    for (int i = 0; i < NVMA; i++) {
+      if (p->vmas[i].used) {
+        struct vma *v = &p->vmas[i];
 
-      // Write back if MAP_SHARED (only allocated pages)
-      if (v->flags & MAP_SHARED) {
-        struct inode *ip = v->file->ip;
+        // Write back if MAP_SHARED (only allocated pages)
+        if (v->flags & MAP_SHARED) {
+          struct inode *ip = v->file->ip;
 
-        // Get file size
-        ilock(ip);
-        uint file_size = ip->size;
-        iunlock(ip);
+          // Get file size
+          ilock(ip);
+          uint file_size = ip->size;
+          iunlock(ip);
 
-        for (uint64 va = v->addr; va < v->addr + v->len; va += PGSIZE) {
-          if (ismapped(p->pagetable, va)) {
-            uint64 offset_in_vma = va - v->addr;
-            uint64 file_offset = v->offset + offset_in_vma;
+          for (uint64 va = v->addr; va < v->addr + v->len; va += PGSIZE) {
+            if (ismapped(p->pagetable, va)) {
+              uint64 offset_in_vma = va - v->addr;
+              uint64 file_offset = v->offset + offset_in_vma;
 
-            // Don't write beyond file size
-            if (file_offset >= file_size) {
-              continue;
-            }
+              // Don't write beyond file size
+              if (file_offset >= file_size) {
+                continue;
+              }
 
-            // Calculate bytes to write
-            uint64 bytes_to_write = PGSIZE;
-            if (file_offset + bytes_to_write > file_size) {
-              bytes_to_write = file_size - file_offset;
-            }
+              // Calculate bytes to write
+              uint64 bytes_to_write = PGSIZE;
+              if (file_offset + bytes_to_write > file_size) {
+                bytes_to_write = file_size - file_offset;
+              }
 
-            if (bytes_to_write > 0) {
-              begin_op();
-              ilock(ip);
-              writei(ip, 1, va, file_offset, bytes_to_write);
-              iunlock(ip);
-              end_op();
+              if (bytes_to_write > 0) {
+                begin_op();
+                ilock(ip);
+                writei(ip, 1, va, file_offset, bytes_to_write);
+                iunlock(ip);
+                end_op();
+              }
             }
           }
         }
+
+        // Unmap pages (only if they've been allocated)
+        uvmunmap(p->pagetable, v->addr, v->len / PGSIZE, 1);
+
+        // Close file
+        fileclose(v->file);
+
+        // Mark as unused
+        v->used = 0;
       }
-
-      // Unmap pages (only if they've been allocated)
-      uvmunmap(p->pagetable, v->addr, v->len / PGSIZE, 1);
-
-      // Close file
-      fileclose(v->file);
-
-      // Mark as unused
-      v->used = 0;
     }
-  }
 
-  begin_op();
-  iput(p->cwd);
-  end_op();
-  p->cwd = 0;
+    begin_op();
+    iput(p->cwd);
+    end_op();
+    p->cwd = 0;
+  }
 
   acquire(&wait_lock);
 
-  // Give any children to init.
+  // Give any children to init (not applicable for kthreads, but harmless).
   reparent(p);
 
   // Parent might be sleeping in wait().
+  // Kernel threads have no parent, so this is a no-op for them.
   wakeup(p->parent);
 
   acquire(&p->lock);
@@ -727,7 +748,100 @@ void procdump(void) {
       state = states[p->state];
     else
       state = "???";
-    printf("%d %s %s", p->pid, state, p->name);
+    printf("%d %s %s%s", p->pid, state, p->name, p->is_kthread ? " [kthread]" : "");
     printf("\n");
   }
+}
+
+// Kernel thread entry point.
+// Called when a kernel thread is first scheduled.
+// Releases the p->lock held from scheduler, then calls the thread function.
+void kthread_entry(void) {
+  struct proc *p = myproc();
+
+  // Release the lock held by scheduler.
+  release(&p->lock);
+
+  // Execute the kernel thread function.
+  if (p->kthread_func) {
+    p->kthread_func(p->kthread_arg);
+  }
+
+  // Thread function returned, exit.
+  kexit(0);
+}
+
+// Create a new kernel thread.
+// The thread will run func(arg) in kernel mode.
+// Returns the new proc on success, 0 on failure.
+struct proc *kthread_create(void (*func)(void *), void *arg, char *name) {
+  struct proc *p;
+
+  // Find an unused proc slot.
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state == UNUSED) {
+      goto found;
+    } else {
+      release(&p->lock);
+    }
+  }
+  return 0;
+
+found:
+  p->pid = allocpid();
+  p->state = USED;
+
+  // Kernel threads don't need trapframe for user mode transition,
+  // but we still allocate one for simplicity (can be used for debugging).
+  if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
+    p->state = UNUSED;
+    release(&p->lock);
+    return 0;
+  }
+  memset(p->trapframe, 0, sizeof(struct trapframe));
+
+  // Kernel threads don't need usyscall.
+  p->usyscall = 0;
+
+  // Kernel threads don't have a user page table.
+  // They use the kernel page table directly.
+  p->pagetable = 0;
+  p->sz = 0;
+
+  // Set up as kernel thread.
+  p->is_kthread = 1;
+  p->kthread_func = func;
+  p->kthread_arg = arg;
+  safestrcpy(p->name, name, sizeof(p->name));
+
+  // Initialize VMAs (not used by kthreads).
+  for (int i = 0; i < NVMA; i++) {
+    p->vmas[i].used = 0;
+  }
+
+  // Initialize signal fields (not used by kthreads).
+  p->pending_signals = 0;
+  p->sig_tf_backup_valid = 0;
+  for (int i = 0; i < NSIG; i++) {
+    p->sig_handlers[i] = (void (*)(int))-1;
+  }
+
+  // Set up context to start at kthread_entry.
+  memset(&p->context, 0, sizeof(p->context));
+  p->context.ra = (uint64)kthread_entry;
+  p->context.sp = p->kstack + PGSIZE;
+
+  // No parent, no cwd, no open files.
+  p->parent = 0;
+  p->cwd = 0;
+  for (int i = 0; i < NOFILE; i++) {
+    p->ofile[i] = 0;
+  }
+
+  // Set the thread to RUNNABLE so it can be scheduled.
+  p->state = RUNNABLE;
+  release(&p->lock);
+
+  return p;
 }

@@ -25,3 +25,10 @@ int copyin(pagetable_t, char *, uint64, uint64);
 int copyinstr(pagetable_t, char *, uint64, uint64);
 int ismapped(pagetable_t, uint64);
 uint64 vmfault(pagetable_t, uint64, int);
+
+// Superpage (2MB huge page) support
+pte_t *walk_superpage(pagetable_t, uint64, int);
+int is_superpage(pte_t);
+int map_superpage(pagetable_t, uint64, uint64, int);
+int demote_superpage(pagetable_t, uint64);
+
