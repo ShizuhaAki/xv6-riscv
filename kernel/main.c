@@ -20,6 +20,13 @@
 #include "test/slab_test_single.h"
 #endif
 
+// Compile-time flag to enable kthread/khugepaged tests (default: OFF)
+// To enable: add -DENABLE_KTHREAD_TESTS to CFLAGS in Makefile
+#ifdef ENABLE_KTHREAD_TESTS
+#include "test/khugepaged_test.h"
+#include "test/kthread_test.h"
+#endif
+
 volatile static int started = 0;
 volatile static int prepared_device = 0;
 
@@ -45,6 +52,12 @@ void main() {
     virtio_disk_init();  // emulated hard disk
     userinit();          // first user process
     khugepaged_init();   // start khugepaged daemon
+
+#ifdef ENABLE_KTHREAD_TESTS
+    // Start test runners as kthreads
+    kthread_test_init();
+    khugepaged_test_init();
+#endif
 
 #ifdef ENABLE_SLAB_TESTS
     slab_test_single();

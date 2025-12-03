@@ -23,6 +23,8 @@ OBJS = \
   $K/test/slab_test_single.o \
   $K/test/slab_test_multi.o \
   $K/test/slab_test_benchmark.o \
+  $K/test/kthread_test.o \
+  $K/test/khugepaged_test.o \
   $K/bio.o \
   $K/fs.o \
   $K/log.o \
@@ -77,6 +79,8 @@ CFLAGS += -fno-builtin-memcpy -Wno-main
 CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
 CFLAGS += -I.
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+# Uncomment to enable kthread and khugepaged tests:
+# CFLAGS += -DENABLE_KTHREAD_TESTS
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
