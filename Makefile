@@ -157,6 +157,10 @@ UPROGS=\
 	$U/_pgtbltest\
 	$U/_mmaptest\
 	$U/_sigtest\
+	$U/_bigwrite\
+	$U/_longnametest\
+	$U/_symlinktest\
+	$U/_hardlinktest
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

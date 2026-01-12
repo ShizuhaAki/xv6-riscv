@@ -26,6 +26,7 @@
 #define SYS_munmap 23
 #define SYS_signal 24
 #define SYS_sigreturn 25
+#define SYS_symlink 26
 
 // Declarations for syscall argument helpers and dispatcher
 #ifndef __ASSEMBLER__

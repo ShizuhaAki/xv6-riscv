@@ -11,6 +11,7 @@
 
 // Forward declaration for fs.c internal function
 struct inode *ialloc(uint, short);
+static struct inode *create(char *path, short type, short major, short minor);
 #include "kalloc.h"
 #include "log.h"
 #include "param.h"
@@ -105,7 +106,7 @@ uint64 sys_fstat(void) {
 
 // Create the path new as a link to the same inode as old.
 uint64 sys_link(void) {
-  char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
+  char name[MAXCOMPONENTSZ], new[MAXPATH], old[MAXPATH];
   struct inode *dp, *ip;
 
   if (argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0) return -1;
@@ -150,13 +151,51 @@ bad:
 }
 
 // Is the directory dp empty except for "." and ".." ?
+uint64
+sys_symlink(void)
+{
+  // printf("Entering symlink\n");
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  // printf("argstr tested\n");
+  begin_op();
+
+  if ((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+  // printf("symlink created\n");
+
+  // ilock(ip);
+  // printf("locked\n");
+
+  int n = strlen(target) + 1;
+  if (writei(ip, 0, (uint64)target, 0, n) != n) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  // printf("writei executed.\n");
+
+  iunlockput(ip);
+  // printf("unlocked\n");
+  end_op();
+
+  return 0;
+}
+
 static int isdirempty(struct inode *dp) {
   int off;
   struct dirent de;
 
   for (off = 2 * sizeof(de); off < dp->size; off += sizeof(de)) {
     if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-      panic("isdirempty: readi");
+      // panic("isdirempty: readi");
+      break;
     if (de.inum != 0) return 0;
   }
   return 1;
@@ -164,8 +203,7 @@ static int isdirempty(struct inode *dp) {
 
 uint64 sys_unlink(void) {
   struct inode *ip, *dp;
-  struct dirent de;
-  char name[DIRSIZ], path[MAXPATH];
+  char name[MAXCOMPONENTSZ], path[MAXPATH];
   uint off;
 
   if (argstr(0, path, MAXPATH) < 0) return -1;
@@ -190,9 +228,19 @@ uint64 sys_unlink(void) {
     goto bad;
   }
 
-  memset(&de, 0, sizeof(de));
-  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-    panic("unlink: writei");
+  // clear entire chain
+  struct dirent zde;
+  memset(&zde, 0, sizeof(zde));
+  uint cur_off = off;
+  while(1) {
+    struct dirent pde;
+    if (readi(dp, 0, (uint64)&pde, cur_off, sizeof(pde)) != sizeof(pde))
+      // panic("unlink peek");
+      break;
+    writei(dp, 0, (uint64)&zde, cur_off, sizeof(zde));
+    if (pde.inum != LONGNAME_CONT) break;
+    cur_off += sizeof(struct dirent);
+  }
   if (ip->type == T_DIR) {
     dp->nlink--;
     iupdate(dp);
@@ -215,7 +263,7 @@ bad:
 
 static struct inode *create(char *path, short type, short major, short minor) {
   struct inode *ip, *dp;
-  char name[DIRSIZ];
+  char name[MAXCOMPONENTSZ];
 
   if ((dp = nameiparent(path, name)) == 0) return 0;
 
@@ -269,6 +317,7 @@ fail:
 }
 
 uint64 sys_open(void) {
+  // printf("Reached sys_open\n");
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
@@ -292,6 +341,32 @@ uint64 sys_open(void) {
       return -1;
     }
     ilock(ip);
+    int depth = 0;
+    while (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW) && depth < 32) {
+      char target[MAXPATH+1];
+      int n = readi(ip, 0, (uint64)target, 0, MAXPATH);
+      iunlock(ip);
+      if (n <= 0 || n >= MAXPATH) {
+        end_op();
+        return -1;
+      }
+      target[n] = 0;
+      iput(ip);
+      ip = namei(target);
+      if (ip == 0) {
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      depth++;
+      // printf("follow depth %d target '%s'\n", depth, target);
+    }
+    if (depth >= 32) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+
     if (ip->type == T_DIR && omode != O_RDONLY) {
       iunlockput(ip);
       end_op();

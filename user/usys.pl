@@ -46,3 +46,4 @@ entry("mmap");
 entry("munmap");
 entry("signal");
 entry("sigreturn");
+entry("symlink");
